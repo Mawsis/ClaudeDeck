@@ -70,6 +70,22 @@ export function deckView(state, now, { connected = true } = {}) {
   return { mode: 'done', title: active.title, elapsedMs: active.elapsedMs }
 }
 
+/**
+ * Rebase a frame's event time onto this device's clock. The gateway stamps
+ * every frame with `serverNow`, so `serverNow - at` is the event's age — a
+ * difference of two readings of the *same* clock, immune to skew between the
+ * server and the deck. Live frames have age 0; replayed frames keep their
+ * true age, so timers stay honest across a network blip.
+ *
+ * @param {{ at: number, serverNow?: number }} frame
+ * @param {number} receiptNow this device's clock at receipt
+ * @returns {number} the event time expressed in this device's clock
+ */
+export function localEventTime(frame, receiptNow) {
+  const age = typeof frame.serverNow === 'number' ? Math.max(0, frame.serverNow - frame.at) : 0
+  return receiptNow - age
+}
+
 // Slow orbit around center; every OLED pixel under the layout gets rest.
 const AMBIENT_ORBIT = Object.freeze([
   { x: 0, y: 0 },

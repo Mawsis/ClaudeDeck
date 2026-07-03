@@ -117,6 +117,7 @@
     formatElapsed,
     formatTimeOfDay,
     initialDeckState,
+    localEventTime,
     reduceDeck,
   } from '/deck-reducer.js'
 
@@ -162,8 +163,9 @@
       type: event.type,
       sessionId: event.sessionId,
       title: event.title,
-      // Server publish time, so events replayed after a blip stay truthful.
-      at: event.at,
+      // Rebased by server-side age: replayed events stay truthful, and the
+      // live tick never mixes the server's clock with this device's.
+      at: localEventTime(event, Date.now()),
     })
     render()
   }
