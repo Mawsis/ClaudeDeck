@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { requireScope, type AuthTokens } from './auth.ts'
 import type { EventLog } from './event-log.ts'
+import { loadPwaHtml } from './static.ts'
 
 export type AppConfig = AuthTokens & {
   readonly eventLog: EventLog
@@ -26,7 +27,10 @@ function parseStopPayload(body: unknown): StopHookPayload | undefined {
 export function createApp(config: AppConfig) {
   const { eventLog, hookToken, deckToken } = config
   const tokens: AuthTokens = { hookToken, deckToken }
+  const pwaHtml = loadPwaHtml()
   const app = new Hono()
+
+  app.get('/', (c) => c.html(pwaHtml))
 
   app.post('/api/events', requireScope('hook', tokens), async (c) => {
     let body: unknown

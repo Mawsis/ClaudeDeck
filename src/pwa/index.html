@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaudeDeck</title>
+<style>
+  :root { --bg: #0c0c0c; --accent: #FF6B00; --done: #4ade80; --dim: #9a9a9a; }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--dim);
+    font-family: ui-monospace, Menlo, monospace;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  }
+  main { text-align: center; padding: 2rem; }
+  h1 { color: var(--accent); font-size: 1rem; letter-spacing: 0.2em; margin-bottom: 2rem; }
+  #session-title { font-size: 2.5rem; color: #fff; word-break: break-all; }
+  #done { display: none; color: var(--done); font-size: 1.25rem; margin-top: 1rem; letter-spacing: 0.3em; }
+  #status { margin-top: 2rem; font-size: 0.75rem; }
+  form { display: flex; gap: 0.5rem; justify-content: center; }
+  input, button {
+    background: var(--bg); color: #fff; border: 2px solid var(--accent);
+    border-radius: 0; padding: 0.6rem 0.8rem; font: inherit;
+  }
+  button { background: var(--accent); color: var(--bg); cursor: pointer; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CLAUDEDECK</h1>
+
+  <form id="token-form" class="hidden">
+    <input id="token-input" type="password" placeholder="paste deck token" autocomplete="off" required>
+    <button type="submit">CONNECT</button>
+  </form>
+
+  <section id="deck" class="hidden">
+    <div id="session-title">waiting for events…</div>
+    <div id="done">■ DONE</div>
+  </section>
+
+  <div id="status"></div>
+</main>
+
+<script>
+  const TOKEN_KEY = 'claudedeck_deck_token'
+  const form = document.getElementById('token-form')
+  const input = document.getElementById('token-input')
+  const deck = document.getElementById('deck')
+  const sessionTitle = document.getElementById('session-title')
+  const done = document.getElementById('done')
+  const status = document.getElementById('status')
+
+  function connect(token) {
+    form.classList.add('hidden')
+    deck.classList.remove('hidden')
+    status.textContent = 'connecting…'
+
+    const source = new EventSource('/api/stream?token=' + encodeURIComponent(token))
+    source.onopen = () => { status.textContent = 'connected' }
+    source.onerror = () => { status.textContent = 'disconnected — retrying' }
+    source.addEventListener('stop', (message) => {
+      const event = JSON.parse(message.data)
+      sessionTitle.textContent = event.title
+      done.style.display = 'block'
+    })
+  }
+
+  form.addEventListener('submit', (submitEvent) => {
+    submitEvent.preventDefault()
+    const token = input.value.trim()
+    if (token === '') return
+    localStorage.setItem(TOKEN_KEY, token)
+    connect(token)
+  })
+
+  const saved = localStorage.getItem(TOKEN_KEY)
+  if (saved) {
+    connect(saved)
+  } else {
+    form.classList.remove('hidden')
+  }
+</script>
+</body>
+</html>
