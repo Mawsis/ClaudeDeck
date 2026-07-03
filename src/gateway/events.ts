@@ -1,5 +1,7 @@
+export type DeckEventType = 'prompt' | 'stop'
+
 export type DeckEventInput = {
-  readonly type: 'stop'
+  readonly type: DeckEventType
   readonly sessionId: string
   readonly title: string
   readonly cwd: string

@@ -4,29 +4,61 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClaudeDeck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
-  :root { --bg: #0c0c0c; --accent: #FF6B00; --done: #4ade80; --dim: #9a9a9a; }
+  :root {
+    --bg: #0c0c0c;
+    --accent: #FF6B00;
+    --done: #4ade80;
+    --dim: #9a9a9a;
+    --idle-digits: #8f8f8f;
+  }
   * { box-sizing: border-box; margin: 0; }
   body {
     background: var(--bg); color: var(--dim);
-    font-family: ui-monospace, Menlo, monospace;
-    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: 'Press Start 2P', ui-monospace, Menlo, monospace;
+    min-height: 100vh; min-height: 100dvh;
+    display: flex; align-items: center; justify-content: center;
   }
-  main { text-align: center; padding: 2rem; }
-  h1 { color: var(--accent); font-size: 1rem; letter-spacing: 0.2em; margin-bottom: 2rem; }
-  #session-title { font-size: 2.5rem; color: #fff; word-break: break-all; }
-  #done { display: none; color: var(--done); font-size: 1.25rem; margin-top: 1rem; letter-spacing: 0.3em; }
-  #status { margin-top: 2rem; font-size: 0.75rem; }
-  form { display: flex; gap: 0.5rem; justify-content: center; }
+  main {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4vmin; padding: 4vmin; width: 100%;
+  }
+  h1 { color: var(--accent); font-size: 2.5vmin; letter-spacing: 0.4em; opacity: 0.5; }
+
+  /* Desk clock: digits own the landscape width; portrait just shrinks them. */
+  #digits {
+    font-size: 16vw; line-height: 1; white-space: nowrap;
+    color: var(--idle-digits);
+  }
+  @media (orientation: portrait) {
+    #digits { font-size: 15vw; }
+  }
+  body[data-mode='running'] #digits { color: var(--accent); opacity: 0.85; }
+  body[data-mode='done'] #digits { color: var(--done); }
+
+  #session-title {
+    font-size: 3.5vmin; color: #fff; opacity: 0.7;
+    max-width: 90vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #mode-label { font-size: 2.5vmin; letter-spacing: 0.4em; }
+  body[data-mode='running'] #mode-label { color: var(--accent); }
+  body[data-mode='done'] #mode-label { color: var(--done); }
+
+  #status { position: fixed; bottom: 2vmin; font-size: 2vmin; opacity: 0.6; }
+
+  form { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
   input, button {
     background: var(--bg); color: #fff; border: 2px solid var(--accent);
-    border-radius: 0; padding: 0.6rem 0.8rem; font: inherit;
+    border-radius: 0; padding: 0.8rem; font: inherit; font-size: 0.75rem;
   }
   button { background: var(--accent); color: var(--bg); cursor: pointer; }
   .hidden { display: none !important; }
 </style>
 </head>
-<body>
+<body data-mode="idle">
 <main>
   <h1>CLAUDEDECK</h1>
 
@@ -36,36 +68,89 @@
   </form>
 
   <section id="deck" class="hidden">
-    <div id="session-title">waiting for events…</div>
-    <div id="done">■ DONE</div>
+    <div id="digits">--:--</div>
+    <div id="session-title"></div>
+    <div id="mode-label">IDLE</div>
   </section>
 
   <div id="status"></div>
 </main>
 
-<script>
+<script type="module">
+  import {
+    deckView,
+    formatElapsed,
+    formatTimeOfDay,
+    initialDeckState,
+    reduceDeck,
+  } from '/deck-reducer.js'
+
   const TOKEN_KEY = 'claudedeck_deck_token'
   const form = document.getElementById('token-form')
   const input = document.getElementById('token-input')
   const deck = document.getElementById('deck')
+  const digits = document.getElementById('digits')
   const sessionTitle = document.getElementById('session-title')
-  const done = document.getElementById('done')
+  const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
+
+  let state = initialDeckState
+
+  // Dumb projection: every visible pixel derives from deckView — no timing
+  // or session logic lives on this side of the reducer.
+  function render() {
+    const view = deckView(state, Date.now())
+    document.body.dataset.mode = view.mode
+    if (view.mode === 'idle') {
+      digits.textContent = formatTimeOfDay(new Date())
+      sessionTitle.textContent = ''
+      modeLabel.textContent = 'IDLE'
+    } else {
+      digits.textContent = view.elapsedMs === null ? '--:--' : formatElapsed(view.elapsedMs)
+      sessionTitle.textContent = view.title
+      modeLabel.textContent = view.mode === 'running' ? 'RUNNING' : '■ DONE'
+    }
+  }
+  setInterval(render, 500)
+
+  function onDeckEvent(message) {
+    const event = JSON.parse(message.data)
+    state = reduceDeck(state, {
+      type: event.type,
+      sessionId: event.sessionId,
+      title: event.title,
+      at: Date.now(),
+    })
+    render()
+  }
 
   function connect(token) {
     form.classList.add('hidden')
     deck.classList.remove('hidden')
     status.textContent = 'connecting…'
+    render()
 
     const source = new EventSource('/api/stream?token=' + encodeURIComponent(token))
     source.onopen = () => { status.textContent = 'connected' }
     source.onerror = () => { status.textContent = 'disconnected — retrying' }
-    source.addEventListener('stop', (message) => {
-      const event = JSON.parse(message.data)
-      sessionTitle.textContent = event.title
-      done.style.display = 'block'
-    })
+    source.addEventListener('prompt', onDeckEvent)
+    source.addEventListener('stop', onDeckEvent)
   }
+
+  // The OS releases the wake lock whenever the page hides; re-acquire on
+  // every return to the foreground so the docked screen stays alive.
+  async function holdWakeLock() {
+    if (!('wakeLock' in navigator)) return
+    try {
+      await navigator.wakeLock.request('screen')
+    } catch {
+      // Denied (e.g. low battery) — the deck still works, the screen may sleep.
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') holdWakeLock()
+  })
+  holdWakeLock()
 
   form.addEventListener('submit', (submitEvent) => {
     submitEvent.preventDefault()
