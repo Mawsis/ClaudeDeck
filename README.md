@@ -14,6 +14,12 @@ stream is down the deck shows an unmistakable gray scanline OFFLINE state.
 Idle/running render dim for the always-on OLED, and the layout pixel-shifts
 every minute against burn-in. Wake Lock keeps the docked screen alive.
 
+Below the clock runs the **activity ticker**: `PostToolUse` hooks (registered
+only for `Write|Edit|MultiEdit|NotebookEdit|Bash`, so reads never pay a hook
+round trip) feed a bounded audit strip. A table-driven classifier highlights
+high-impact Bash commands (installs, migrations, docker, pushes, deploys);
+everything else renders as a dim one-liner.
+
 ## Develop
 
 ```bash

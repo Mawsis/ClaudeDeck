@@ -31,6 +31,26 @@ describe('config generator', () => {
     expect(hook.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
   })
 
+  it('registers a PostToolUse http hook gated to write-capable tools only', () => {
+    const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com' })
+
+    const postToolUseMatchers = settings.hooks.PostToolUse
+    expect(postToolUseMatchers).toHaveLength(1)
+    const { matcher, hooks } = postToolUseMatchers[0]!
+    expect(hooks[0]!.url).toBe('https://deck.example.com/api/events')
+    expect(hooks[0]!.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
+
+    // Read-only tools must never incur a hook round trip (issue #5 / D7):
+    // the matcher regex may name only write-capable tools.
+    const asRegex = new RegExp(`^(?:${matcher!})$`)
+    for (const writeTool of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash']) {
+      expect(asRegex.test(writeTool), `${writeTool} should match`).toBe(true)
+    }
+    for (const readOnlyTool of ['Read', 'Grep', 'Glob', 'WebFetch', 'WebSearch', 'TodoWrite']) {
+      expect(asRegex.test(readOnlyTool), `${readOnlyTool} should not match`).toBe(false)
+    }
+  })
+
   it('normalizes a trailing slash on the gateway url', () => {
     const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com/' })
 

@@ -6,7 +6,7 @@
 <title>ClaudeDeck</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0c0c0c;
@@ -83,6 +83,29 @@
 
   #status { position: fixed; bottom: 2vmin; font-size: 2vmin; opacity: 0.6; }
 
+  /* Activity ticker (D7, D16): bottom strip, VT323 (D13), newest row first.
+     Rows stay ambient-dim; highlighted actions use the ambient accent — full
+     saturation remains reserved for transition moments. */
+  #ticker {
+    position: fixed; left: 2vmin; right: 2vmin; bottom: 6vmin;
+    margin: 0; padding: 0; list-style: none;
+    max-height: 13vmin; overflow: hidden;
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; line-height: 1.4; text-align: left;
+    transition: transform 1.2s ease;
+  }
+  #ticker li {
+    color: var(--dim); opacity: 0.5;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    animation: ticker-in 150ms ease-out;
+  }
+  #ticker li[data-risk='highlighted'] { color: var(--accent-ambient); opacity: 0.95; }
+  body[data-mode='offline'] #ticker li { color: var(--offline); }
+  /* D17: one slide-in under 150ms per row, then stillness. */
+  @keyframes ticker-in {
+    from { transform: translateY(-0.5em); opacity: 0; }
+  }
+
   form { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
   input, button {
     background: var(--bg); color: #fff; border: 2px solid var(--accent);
@@ -110,6 +133,8 @@
   <div id="status"></div>
 </main>
 
+<ul id="ticker" class="hidden"></ul>
+
 <script type="module">
   import {
     ambientShift,
@@ -117,8 +142,10 @@
     formatElapsed,
     formatTimeOfDay,
     initialDeckState,
+    initialTicker,
     localEventTime,
     reduceDeck,
+    reduceTicker,
   } from '/deck-reducer.js'
 
   const TOKEN_KEY = 'claudedeck_deck_token'
@@ -130,8 +157,10 @@
   const sessionTitle = document.getElementById('session-title')
   const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
+  const tickerEl = document.getElementById('ticker')
 
   let state = initialDeckState
+  let ticker = initialTicker
   let connected = false
 
   // Dumb projection: every visible pixel derives from deckView — no timing
@@ -154,8 +183,31 @@
     }
     const shift = ambientShift(Math.floor(Date.now() / 60_000))
     main.style.transform = `translate(${shift.x}px, ${shift.y}px)`
+    tickerEl.style.transform = `translate(${shift.x}px, ${shift.y}px)`
   }
   setInterval(render, 500)
+
+  // Prepend only rows the DOM hasn't seen so the 150ms slide-in fires exactly
+  // once per action; eviction mirrors the reducer's bounded window.
+  const renderedRowKeys = new Set()
+  function renderTicker() {
+    for (let i = ticker.length - 1; i >= 0; i -= 1) {
+      const row = ticker[i]
+      if (renderedRowKeys.has(row.key)) continue
+      renderedRowKeys.add(row.key)
+      const li = document.createElement('li')
+      li.dataset.key = row.key
+      li.dataset.risk = row.risk
+      // Command text is untrusted input — textContent only, never markup.
+      li.textContent = row.tool === 'Bash' ? '$ ' + row.detail : row.tool + ' ' + row.detail
+      tickerEl.prepend(li)
+    }
+    while (tickerEl.childElementCount > ticker.length) {
+      const oldest = tickerEl.lastElementChild
+      renderedRowKeys.delete(oldest.dataset.key)
+      oldest.remove()
+    }
+  }
 
   function onDeckEvent(message) {
     const event = JSON.parse(message.data)
@@ -170,9 +222,16 @@
     render()
   }
 
+  function onToolEvent(message) {
+    const event = JSON.parse(message.data)
+    ticker = reduceTicker(ticker, { ...event, at: localEventTime(event, Date.now()) })
+    renderTicker()
+  }
+
   function connect(token) {
     form.classList.add('hidden')
     deck.classList.remove('hidden')
+    tickerEl.classList.remove('hidden')
     status.textContent = 'connecting…'
     render()
 
@@ -191,6 +250,7 @@
     }
     source.addEventListener('prompt', onDeckEvent)
     source.addEventListener('stop', onDeckEvent)
+    source.addEventListener('tool', onToolEvent)
   }
 
   // The OS releases the wake lock whenever the page hides; re-acquire on

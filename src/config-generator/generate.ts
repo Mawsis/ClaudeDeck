@@ -6,15 +6,22 @@ export type HttpHook = {
   readonly headers: { readonly Authorization: string }
 }
 
-export type HookMatcher = { readonly hooks: readonly HttpHook[] }
+export type HookMatcher = { readonly matcher?: string; readonly hooks: readonly HttpHook[] }
 
 export type HookSettings = {
   readonly hooks: {
     readonly Stop: readonly HookMatcher[]
     readonly UserPromptSubmit: readonly HookMatcher[]
+    readonly PostToolUse: readonly HookMatcher[]
   }
   readonly allowedEnvVars: readonly string[]
 }
+
+/**
+ * The ticker's audit scope (D7): only write-capable tools. Read-only tools
+ * are deliberately absent so reads never incur a hook round trip.
+ */
+export const TICKER_TOOL_MATCHER = 'Write|Edit|MultiEdit|NotebookEdit|Bash'
 
 function normalizeGatewayUrl(raw: string): string {
   let parsed: URL
@@ -52,6 +59,7 @@ export function generateHookSettings(options: { gatewayUrl: string }): HookSetti
     hooks: {
       Stop: [ingestMatcher],
       UserPromptSubmit: [ingestMatcher],
+      PostToolUse: [{ matcher: TICKER_TOOL_MATCHER, ...ingestMatcher }],
     },
     allowedEnvVars: [HOOK_TOKEN_ENV_VAR],
   }
