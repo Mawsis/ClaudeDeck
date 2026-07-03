@@ -1,16 +1,12 @@
 import { serve } from '@hono/node-server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createApp } from '../src/gateway/app.ts'
-import { createEventLog } from '../src/gateway/event-log.ts'
-
-const HOOK_TOKEN = 'hook-token-for-tests-0123456789abcdef'
-const DECK_TOKEN = 'deck-token-for-tests-0123456789abcdef'
+import { buildApp, DECK_TOKEN, HOOK_TOKEN } from './helpers.ts'
 
 let server: ReturnType<typeof serve>
 let baseUrl: string
 
 beforeAll(async () => {
-  const app = createApp({ hookToken: HOOK_TOKEN, deckToken: DECK_TOKEN, eventLog: createEventLog() })
+  const { app } = buildApp()
   await new Promise<void>((resolve) => {
     server = serve({ fetch: app.fetch, port: 0 }, (info) => {
       baseUrl = `http://127.0.0.1:${info.port}`

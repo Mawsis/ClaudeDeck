@@ -1,15 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '../src/gateway/app.ts'
-import { createEventLog } from '../src/gateway/event-log.ts'
-
-const HOOK_TOKEN = 'hook-token-for-tests-0123456789abcdef'
-const DECK_TOKEN = 'deck-token-for-tests-0123456789abcdef'
-
-function buildApp() {
-  const eventLog = createEventLog()
-  const app = createApp({ hookToken: HOOK_TOKEN, deckToken: DECK_TOKEN, eventLog })
-  return { app, eventLog }
-}
+import { buildApp, DECK_TOKEN, HOOK_TOKEN } from './helpers.ts'
 
 const stopPayload = {
   hook_event_name: 'Stop',
