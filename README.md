@@ -28,6 +28,18 @@ vibration tap; a backgrounded or locked phone gets a Web Push notification
 carrying the session title (enable by setting the VAPID variables from
 `deploy/.env.example` — without them, only in-page alerts fire).
 
+**Approve or deny from the deck**: a `PermissionRequest` http hook — it fires
+only when a permission dialog would genuinely appear, so allowlisted commands
+never reach the deck — POSTs to `/api/permission`, and the gateway holds the
+request open while the deck takes over the screen: tool name plus the exact
+command/path payload in real monospace, with **Allow**, **Deny**, and
+**Ask-in-terminal** taps. Allow/Deny answer the hook with the documented
+decision JSON; Ask-in-terminal — and every fallback — returns *no decision*,
+letting the terminal dialog proceed normally. Fallbacks never auto-deny:
+immediately when no deck is connected, at 540s (under the 600s hook timeout)
+when a connected deck stays silent. Prompt arrival always alerts (takeover +
+vibration in view, Web Push otherwise), and prompts queue FIFO, oldest first.
+
 ## Develop
 
 ```bash

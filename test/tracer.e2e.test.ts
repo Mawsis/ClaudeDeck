@@ -94,6 +94,64 @@ describe('tracer: Stop hook to deck', () => {
   })
 })
 
+describe('tracer: permission gate', () => {
+  it('holds a PermissionRequest over a real socket until the deck taps Allow, then answers the hook', async () => {
+    const controller = new AbortController()
+    const streamResponse = await fetch(`${baseUrl}/api/stream?token=${DECK_TOKEN}`, {
+      signal: controller.signal,
+    })
+    const reader = streamResponse.body!.getReader()
+
+    const postedAt = Date.now()
+    const hookResponsePromise = fetch(`${baseUrl}/api/permission`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${HOOK_TOKEN}`,
+      },
+      body: JSON.stringify({
+        hook_event_name: 'PermissionRequest',
+        session_id: 'sess-e2e',
+        cwd: '/Users/mac/Workshop/Personal/my-app',
+        tool_name: 'Bash',
+        tool_input: { command: 'npm publish' },
+      }),
+    })
+
+    // The card reaches the deck fast — it is blocking a terminal.
+    let frames = ''
+    const decoder = new TextDecoder()
+    while (!frames.includes('event: permission')) {
+      frames += decoder.decode((await reader.read()).value)
+    }
+    expect(Date.now() - postedAt).toBeLessThan(1000)
+    expect(frames).toContain('"detail":"npm publish"')
+    const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
+
+    const resolution = await fetch(`${baseUrl}/api/prompts/${promptId}/resolution`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${DECK_TOKEN}`,
+      },
+      body: JSON.stringify({ action: 'allow' }),
+    })
+    expect(resolution.status).toBe(200)
+
+    // The held hook request unblocks with the documented decision.
+    const hookResponse = await hookResponsePromise
+    expect(hookResponse.status).toBe(200)
+    expect(await hookResponse.json()).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest',
+        decision: { behavior: 'allow' },
+      },
+    })
+
+    controller.abort()
+  })
+})
+
 describe('tracer: activity ticker', () => {
   it('delivers a PostToolUse Bash payload to a connected deck within 1s, correctly highlighted', async () => {
     const controller = new AbortController()

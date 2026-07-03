@@ -13,6 +13,7 @@ export type HookSettings = {
     readonly Stop: readonly HookMatcher[]
     readonly UserPromptSubmit: readonly HookMatcher[]
     readonly PostToolUse: readonly HookMatcher[]
+    readonly PermissionRequest: readonly HookMatcher[]
   }
   readonly allowedEnvVars: readonly string[]
 }
@@ -37,29 +38,34 @@ function normalizeGatewayUrl(raw: string): string {
 }
 
 /**
- * Emits the Claude Code settings block registering ClaudeDeck's lifecycle
- * hooks (Stop + UserPromptSubmit). The generator never sees the secret
- * itself — the Authorization header is the `$VAR` interpolation form,
- * resolved by Claude Code at hook time and gated by `allowedEnvVars`.
+ * Emits the Claude Code settings block registering ClaudeDeck's hooks:
+ * lifecycle (Stop + UserPromptSubmit), ticker (PostToolUse), and the
+ * permission gate (PermissionRequest — fires only when a dialog would
+ * genuinely appear, so allowlisted commands never reach the deck, per D3).
+ * The generator never sees the secret itself — the Authorization header is
+ * the `$VAR` interpolation form, resolved by Claude Code at hook time and
+ * gated by `allowedEnvVars`.
  */
 export function generateHookSettings(options: { gatewayUrl: string }): HookSettings {
   const base = normalizeGatewayUrl(options.gatewayUrl)
 
-  const ingestMatcher: HookMatcher = {
+  const httpHook = (path: string): HookMatcher => ({
     hooks: [
       {
         type: 'http',
-        url: `${base}/api/events`,
+        url: `${base}${path}`,
         headers: { Authorization: `Bearer $${HOOK_TOKEN_ENV_VAR}` },
       },
     ],
-  }
+  })
+  const ingestMatcher = httpHook('/api/events')
 
   return {
     hooks: {
       Stop: [ingestMatcher],
       UserPromptSubmit: [ingestMatcher],
       PostToolUse: [{ matcher: TICKER_TOOL_MATCHER, ...ingestMatcher }],
+      PermissionRequest: [httpHook('/api/permission')],
     },
     allowedEnvVars: [HOOK_TOKEN_ENV_VAR],
   }

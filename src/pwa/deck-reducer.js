@@ -159,6 +159,42 @@ export function reduceTicker(ticker, event) {
   return [row, ...ticker].slice(0, TICKER_CAPACITY)
 }
 
+/**
+ * @typedef {{ promptId: string, title: string, tool: string, detail: string }} PendingPrompt
+ */
+
+/** @type {readonly PendingPrompt[]} */
+export const initialPrompts = Object.freeze([])
+
+/**
+ * Pending approval cards, oldest first — the deck renders prompts[0].
+ *
+ * @param {readonly PendingPrompt[]} prompts
+ * @param {{ type: string, promptId?: string, title?: string, tool?: string, detail?: string,
+ *   outcome?: string }} event a deck SSE frame — external JSON, so fields are
+ *   normalized, not trusted.
+ * @returns {readonly PendingPrompt[]}
+ */
+export function reducePrompts(prompts, event) {
+  if (event.type === 'permission-resolved') {
+    return prompts.filter((prompt) => prompt.promptId !== event.promptId)
+  }
+  if (event.type !== 'permission') return prompts
+  // Reconnect replay is at-least-once; a redelivered prompt is the same card.
+  // promptIds are unique per gateway process, and the ring buffer (like every
+  // pending prompt) dies with it — cross-restart collisions can't replay.
+  if (prompts.some((prompt) => prompt.promptId === event.promptId)) return prompts
+  return [
+    ...prompts,
+    {
+      promptId: String(event.promptId ?? ''),
+      title: String(event.title ?? ''),
+      tool: String(event.tool ?? ''),
+      detail: String(event.detail ?? ''),
+    },
+  ]
+}
+
 // Slow orbit around center; every OLED pixel under the layout gets rest.
 const AMBIENT_ORBIT = Object.freeze([
   { x: 0, y: 0 },

@@ -6,8 +6,10 @@ import { requireScope, type AuthTokens } from './auth.ts'
 import { classifyBash } from './bash-classifier.ts'
 import type { EventLog } from './event-log.ts'
 import type { DeckEvent } from './events.ts'
+import { registerPermissionRoutes } from './permission-routes.ts'
 import { createPushRegistry, type PushSender, type PushSubscriptionJson } from './push-registry.ts'
 import { loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
+import { clampDetail, extractToolDetail } from './tool-detail.ts'
 
 export type { PushSender, PushSubscriptionJson } from './push-registry.ts'
 
@@ -23,11 +25,12 @@ export type AppConfig = AuthTokens & {
   readonly maxStreamClients?: number
   readonly now?: () => number
   readonly alerts?: AlertsConfig
+  /** Test seam only — production uses the 540s D4 default. */
+  readonly permissionTimeoutMs?: number
 }
 
 const DEFAULT_MAX_STREAM_CLIENTS = 8
 const MAX_TITLE_LENGTH = 120
-const MAX_DETAIL_LENGTH = 200
 
 const HOOK_EVENT_TYPES = {
   Stop: 'stop',
@@ -47,38 +50,6 @@ type HookPayload =
       readonly tool_name: string
       readonly detail: string
     }
-
-/**
- * `slice()` counts UTF-16 units and can cut a surrogate pair in half, leaving
- * a broken glyph on the ticker — clamp on code points instead. The unit-level
- * pre-slice keeps `Array.from` off pathologically long commands; the +1 spare
- * unit covers the worst case of the cap landing inside the last pair.
- */
-function clampDetail(text: string): string {
-  if (text.length <= MAX_DETAIL_LENGTH) return text
-  return Array.from(text.slice(0, MAX_DETAIL_LENGTH * 2 + 1))
-    .slice(0, MAX_DETAIL_LENGTH)
-    .join('')
-}
-
-/**
- * The one-liner the ticker shows for a tool call: the command for Bash, the
- * touched file for edit tools — relative to the session's cwd, since the row
- * already carries the session label. Best-effort — an unrecognized input
- * shape yields an empty detail rather than dropping the audit row.
- */
-function extractToolDetail(toolInput: unknown, cwd: string): string {
-  if (typeof toolInput !== 'object' || toolInput === null) return ''
-  const record = toolInput as Record<string, unknown>
-  if (typeof record.command === 'string' && record.command !== '') return record.command
-  for (const key of ['file_path', 'notebook_path']) {
-    const value = record[key]
-    if (typeof value === 'string' && value !== '') {
-      return value.startsWith(`${cwd}/`) ? value.slice(cwd.length + 1) : value
-    }
-  }
-  return ''
-}
 
 /** A missing or malformed header replays nothing — Infinity is "after everything". */
 function parseLastEventId(header: string | undefined): number {
@@ -241,6 +212,16 @@ export function createApp(config: AppConfig) {
   // Oldest-first so exceeding the cap evicts stale/dead connections rather
   // than locking out a reconnecting deck.
   const activeStreamClosers: Array<() => void> = []
+
+  // D3/D4: a permission prompt is held only while a deck stream is open to
+  // render it — otherwise holding just delays the terminal dialog.
+  registerPermissionRoutes(app, {
+    tokens,
+    eventLog,
+    pushRegistry,
+    hasDeck: () => activeStreamClosers.length > 0,
+    timeoutMs: config.permissionTimeoutMs,
+  })
 
   app.get('/api/stream', requireScope('deck', tokens), (c) =>
     streamSSE(

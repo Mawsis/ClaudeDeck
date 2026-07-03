@@ -51,6 +51,19 @@ describe('config generator', () => {
     }
   })
 
+  it('registers a PermissionRequest http hook pointed at the permission hold route', () => {
+    const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com' })
+
+    // D3: PermissionRequest, not PreToolUse — it fires only when a dialog
+    // would genuinely appear, so allowlisted commands never reach the deck.
+    const permissionMatchers = settings.hooks.PermissionRequest
+    expect(permissionMatchers).toHaveLength(1)
+    const hook = permissionMatchers[0]!.hooks[0]!
+    expect(hook.type).toBe('http')
+    expect(hook.url).toBe('https://deck.example.com/api/permission')
+    expect(hook.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
+  })
+
   it('normalizes a trailing slash on the gateway url', () => {
     const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com/' })
 
