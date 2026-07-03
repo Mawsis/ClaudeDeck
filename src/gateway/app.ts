@@ -7,7 +7,11 @@ import { loadPwaHtml } from './static.ts'
 
 export type AppConfig = AuthTokens & {
   readonly eventLog: EventLog
+  readonly maxStreamClients?: number
 }
+
+const DEFAULT_MAX_STREAM_CLIENTS = 8
+const MAX_TITLE_LENGTH = 120
 
 type StopHookPayload = {
   readonly hook_event_name: 'Stop'
@@ -48,24 +52,53 @@ export function createApp(config: AppConfig) {
     const event = eventLog.publish({
       type: 'stop',
       sessionId: payload.session_id,
-      title: basename(payload.cwd),
+      title: basename(payload.cwd).slice(0, MAX_TITLE_LENGTH),
       cwd: payload.cwd,
     })
     return c.json({ id: event.id }, 202)
   })
 
+  const maxStreamClients = config.maxStreamClients ?? DEFAULT_MAX_STREAM_CLIENTS
+  // Oldest-first so exceeding the cap evicts stale/dead connections rather
+  // than locking out a reconnecting deck.
+  const activeStreamClosers: Array<() => void> = []
+
   app.get('/api/stream', requireScope('deck', tokens), (c) =>
-    streamSSE(c, async (stream) => {
-      const unsubscribe = eventLog.subscribe((event) => {
-        void stream.writeSSE({
-          id: String(event.id),
-          event: event.type,
-          data: JSON.stringify(event),
+    streamSSE(
+      c,
+      async (stream) => {
+        let finish!: () => void
+        const closed = new Promise<void>((resolve) => {
+          finish = resolve
         })
-      })
-      stream.onAbort(unsubscribe)
-      await new Promise<void>((resolve) => stream.onAbort(resolve))
-    }),
+        const unsubscribe = eventLog.subscribe((event) => {
+          void stream.writeSSE({
+            id: String(event.id),
+            event: event.type,
+            data: JSON.stringify(event),
+          })
+        })
+        const close = () => {
+          unsubscribe()
+          finish()
+        }
+
+        activeStreamClosers.push(close)
+        while (activeStreamClosers.length > maxStreamClients) {
+          activeStreamClosers.shift()!()
+        }
+        stream.onAbort(() => {
+          const index = activeStreamClosers.indexOf(close)
+          if (index !== -1) activeStreamClosers.splice(index, 1)
+          close()
+        })
+
+        await closed
+      },
+      async (error) => {
+        console.error('sse stream error:', error)
+      },
+    ),
   )
 
   return app

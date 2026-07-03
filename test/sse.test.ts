@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { createApp } from '../src/gateway/app.ts'
+import { createEventLog } from '../src/gateway/event-log.ts'
 import { buildApp, DECK_TOKEN, HOOK_TOKEN } from './helpers.ts'
 
 describe('SSE stream', () => {
@@ -34,5 +36,31 @@ describe('SSE stream', () => {
     const response = await app.request('/api/stream')
 
     expect(response.status).toBe(401)
+  })
+
+  it('evicts the oldest stream when the client cap is exceeded, keeping the newest live', async () => {
+    const eventLog = createEventLog()
+    const app = createApp({
+      hookToken: HOOK_TOKEN,
+      deckToken: DECK_TOKEN,
+      eventLog,
+      maxStreamClients: 1,
+    })
+
+    const first = await app.request(`/api/stream?token=${DECK_TOKEN}`)
+    const firstReader = first.body!.getReader()
+    const second = await app.request(`/api/stream?token=${DECK_TOKEN}`)
+    const secondReader = second.body!.getReader()
+
+    eventLog.publish({ type: 'stop', sessionId: 's', title: 'live', cwd: '/live' })
+
+    const secondFrame = new TextDecoder().decode((await secondReader.read()).value)
+    expect(secondFrame).toContain('"title":"live"')
+
+    // the evicted stream closes instead of receiving the event
+    const firstRead = await firstReader.read()
+    expect(firstRead.done).toBe(true)
+
+    await secondReader.cancel()
   })
 })
