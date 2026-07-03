@@ -88,7 +88,7 @@ describe('event ingest', () => {
     expect(events[0]).toMatchObject({ type: 'prompt', sessionId: 'sess-42', title: 'my-app' })
   })
 
-  it('rejects hook event names outside Stop and UserPromptSubmit with 400', async () => {
+  it('rejects hook event names outside the supported set with 400', async () => {
     const { app, eventLog } = buildApp()
 
     const response = await postEvent(app, HOOK_TOKEN, {
@@ -99,5 +99,102 @@ describe('event ingest', () => {
 
     expect(response.status).toBe(400)
     expect(eventLog.history()).toHaveLength(0)
+  })
+
+  it('publishes a PostToolUse Bash payload as a tool event classified by its command', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess-42',
+      cwd: '/Users/mac/Workshop/Personal/my-app',
+      tool_name: 'Bash',
+      tool_input: { command: 'npm install hono' },
+    })
+
+    expect(response.status).toBe(202)
+    expect(eventLog.history()[0]).toMatchObject({
+      type: 'tool',
+      sessionId: 'sess-42',
+      title: 'my-app',
+      tool: 'Bash',
+      detail: 'npm install hono',
+      category: 'package-install',
+      risk: 'highlighted',
+    })
+  })
+
+  it('publishes an Edit as a routine row detailed with the file path relative to the cwd', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess-42',
+      cwd: '/Users/mac/Workshop/Personal/my-app',
+      tool_name: 'Edit',
+      tool_input: { file_path: '/Users/mac/Workshop/Personal/my-app/src/gateway/app.ts' },
+    })
+
+    expect(response.status).toBe(202)
+    expect(eventLog.history()[0]).toMatchObject({
+      type: 'tool',
+      tool: 'Edit',
+      detail: 'src/gateway/app.ts',
+      category: 'edit',
+      risk: 'routine',
+    })
+  })
+
+  it('rejects a PostToolUse payload without a tool_name with 400', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess-42',
+      cwd: '/tmp/app',
+      tool_input: { command: 'ls' },
+    })
+
+    expect(response.status).toBe(400)
+    expect(eventLog.history()).toHaveLength(0)
+  })
+
+  it('clamps a pathological command to a bounded detail but classifies the full string', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess-42',
+      cwd: '/tmp/app',
+      tool_name: 'Bash',
+      // The high-impact part sits beyond the clamp — the highlight must not
+      // be truncated away with the display text.
+      tool_input: { command: `echo ${'x'.repeat(400)} && git push --force` },
+    })
+
+    expect(response.status).toBe(202)
+    const event = eventLog.history()[0]!
+    expect(event).toMatchObject({ type: 'tool', category: 'git-push', risk: 'highlighted' })
+    if (event.type === 'tool') expect(event.detail.length).toBeLessThanOrEqual(200)
+  })
+
+  it('never clamps mid-character — an astral glyph at the boundary is dropped whole, not split', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'PostToolUse',
+      session_id: 'sess-42',
+      cwd: '/tmp/app',
+      tool_name: 'Bash',
+      // '🚀' is two UTF-16 code units; placed to straddle the 200-unit clamp.
+      tool_input: { command: `echo ${'x'.repeat(194)}🚀🚀🚀` },
+    })
+
+    expect(response.status).toBe(202)
+    const event = eventLog.history()[0]!
+    if (event.type === 'tool') {
+      // A lone surrogate at the end would render as a broken glyph (D13).
+      expect(event.detail).not.toMatch(/[\uD800-\uDBFF]$/)
+    }
   })
 })

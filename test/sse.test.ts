@@ -99,6 +99,30 @@ describe('SSE stream', () => {
     await reader.cancel()
   })
 
+  it('stamps every frame with a bootId stable per gateway process and distinct across restarts', async () => {
+    // A restarted gateway restarts ids at 1; the bootId is what lets a deck
+    // that stayed open tell a colliding new id apart from a replayed old one.
+    const readBootId = async (app: ReturnType<typeof buildApp>['app'], eventLog: ReturnType<typeof buildApp>['eventLog']) => {
+      const response = await app.request(`/api/stream?token=${DECK_TOKEN}`)
+      const reader = response.body!.getReader()
+      eventLog.publish({ type: 'stop', sessionId: 's', title: 'a', cwd: '/a' })
+      const frame = new TextDecoder().decode((await reader.read()).value)
+      await reader.cancel()
+      return /"bootId":"([^"]+)"/.exec(frame)?.[1]
+    }
+
+    const first = buildApp()
+    const bootA = await readBootId(first.app, first.eventLog)
+    const bootAAgain = await readBootId(first.app, first.eventLog)
+    const restarted = buildApp()
+    const bootB = await readBootId(restarted.app, restarted.eventLog)
+
+    expect(bootA).toBeTruthy()
+    expect(bootAAgain).toBe(bootA)
+    expect(bootB).toBeTruthy()
+    expect(bootB).not.toBe(bootA)
+  })
+
   it('rejects the hook token on the stream — wrong scope', async () => {
     const { app } = buildApp()
 

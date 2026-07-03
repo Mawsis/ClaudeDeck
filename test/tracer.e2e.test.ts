@@ -93,3 +93,86 @@ describe('tracer: Stop hook to deck', () => {
     second.abort()
   })
 })
+
+describe('tracer: activity ticker', () => {
+  it('delivers a PostToolUse Bash payload to a connected deck within 1s, correctly highlighted', async () => {
+    const controller = new AbortController()
+    const streamResponse = await fetch(`${baseUrl}/api/stream?token=${DECK_TOKEN}`, {
+      signal: controller.signal,
+    })
+    const reader = streamResponse.body!.getReader()
+
+    const postedAt = Date.now()
+    const ingestResponse = await fetch(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${HOOK_TOKEN}`,
+      },
+      body: JSON.stringify({
+        hook_event_name: 'PostToolUse',
+        session_id: 'sess-e2e',
+        cwd: '/Users/mac/Workshop/Personal/my-app',
+        tool_name: 'Bash',
+        tool_input: { command: 'docker compose up -d --build' },
+      }),
+    })
+    expect(ingestResponse.status).toBe(202)
+
+    const { value } = await reader.read()
+    const elapsed = Date.now() - postedAt
+    const frame = new TextDecoder().decode(value)
+
+    expect(frame).toContain('event: tool')
+    expect(frame).toContain('"detail":"docker compose up -d --build"')
+    expect(frame).toContain('"risk":"highlighted"')
+    expect(elapsed).toBeLessThan(1000)
+
+    controller.abort()
+  })
+
+  it('survives a gateway restart: a deck holding a stale Last-Event-ID still receives new live events', async () => {
+    // A restarted gateway has an empty log and ids starting over from 1 —
+    // history is lost by design, but the deck must keep receiving.
+    const { app: restartedApp } = buildApp()
+    let restarted!: ReturnType<typeof serve>
+    const restartedUrl = await new Promise<string>((resolve) => {
+      restarted = serve({ fetch: restartedApp.fetch, port: 0 }, (info) =>
+        resolve(`http://127.0.0.1:${info.port}`),
+      )
+    })
+
+    try {
+      const controller = new AbortController()
+      const streamResponse = await fetch(`${restartedUrl}/api/stream?token=${DECK_TOKEN}`, {
+        headers: { 'Last-Event-ID': '9999' },
+        signal: controller.signal,
+      })
+      const reader = streamResponse.body!.getReader()
+
+      const ingestResponse = await fetch(`${restartedUrl}/api/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${HOOK_TOKEN}`,
+        },
+        body: JSON.stringify({
+          hook_event_name: 'PostToolUse',
+          session_id: 'sess-restart',
+          cwd: '/w/restart-app',
+          tool_name: 'Edit',
+          tool_input: { file_path: '/w/restart-app/src/index.ts' },
+        }),
+      })
+      expect(ingestResponse.status).toBe(202)
+
+      const frame = new TextDecoder().decode((await reader.read()).value)
+      expect(frame).toContain('event: tool')
+      expect(frame).toContain('"sessionId":"sess-restart"')
+
+      controller.abort()
+    } finally {
+      restarted.close()
+    }
+  })
+})

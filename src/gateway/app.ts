@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { requireScope, type AuthTokens } from './auth.ts'
+import { classifyBash } from './bash-classifier.ts'
 import type { EventLog } from './event-log.ts'
 import type { DeckEvent } from './events.ts'
 import { loadDeckReducerJs, loadPwaHtml } from './static.ts'
@@ -14,16 +15,57 @@ export type AppConfig = AuthTokens & {
 
 const DEFAULT_MAX_STREAM_CLIENTS = 8
 const MAX_TITLE_LENGTH = 120
+const MAX_DETAIL_LENGTH = 200
 
 const HOOK_EVENT_TYPES = {
   Stop: 'stop',
   UserPromptSubmit: 'prompt',
 } as const
 
-type HookPayload = {
-  readonly type: (typeof HOOK_EVENT_TYPES)[keyof typeof HOOK_EVENT_TYPES]
-  readonly session_id: string
-  readonly cwd: string
+type HookPayload =
+  | {
+      readonly type: (typeof HOOK_EVENT_TYPES)[keyof typeof HOOK_EVENT_TYPES]
+      readonly session_id: string
+      readonly cwd: string
+    }
+  | {
+      readonly type: 'tool'
+      readonly session_id: string
+      readonly cwd: string
+      readonly tool_name: string
+      readonly detail: string
+    }
+
+/**
+ * `slice()` counts UTF-16 units and can cut a surrogate pair in half, leaving
+ * a broken glyph on the ticker — clamp on code points instead. The unit-level
+ * pre-slice keeps `Array.from` off pathologically long commands; the +1 spare
+ * unit covers the worst case of the cap landing inside the last pair.
+ */
+function clampDetail(text: string): string {
+  if (text.length <= MAX_DETAIL_LENGTH) return text
+  return Array.from(text.slice(0, MAX_DETAIL_LENGTH * 2 + 1))
+    .slice(0, MAX_DETAIL_LENGTH)
+    .join('')
+}
+
+/**
+ * The one-liner the ticker shows for a tool call: the command for Bash, the
+ * touched file for edit tools — relative to the session's cwd, since the row
+ * already carries the session label. Best-effort — an unrecognized input
+ * shape yields an empty detail rather than dropping the audit row.
+ */
+function extractToolDetail(toolInput: unknown, cwd: string): string {
+  if (typeof toolInput !== 'object' || toolInput === null) return ''
+  const record = toolInput as Record<string, unknown>
+  if (typeof record.command === 'string' && record.command !== '') return record.command
+  for (const key of ['file_path', 'notebook_path']) {
+    const value = record[key]
+    if (typeof value === 'string' && value !== '') {
+      return value.startsWith(`${cwd}/`) ? value.slice(cwd.length + 1) : value
+    }
+  }
+  return ''
 }
 
 /** A missing or malformed header replays nothing — Infinity is "after everything". */
@@ -36,16 +78,32 @@ function parseLastEventId(header: string | undefined): number {
 function parseHookPayload(body: unknown): HookPayload | undefined {
   if (typeof body !== 'object' || body === null) return undefined
   const record = body as Record<string, unknown>
-  const type = HOOK_EVENT_TYPES[record.hook_event_name as keyof typeof HOOK_EVENT_TYPES]
-  if (type === undefined) return undefined
   if (typeof record.session_id !== 'string' || record.session_id === '') return undefined
   if (typeof record.cwd !== 'string' || record.cwd === '') return undefined
-  return { type, session_id: record.session_id, cwd: record.cwd }
+  const common = { session_id: record.session_id, cwd: record.cwd }
+
+  if (record.hook_event_name === 'PostToolUse') {
+    if (typeof record.tool_name !== 'string' || record.tool_name === '') return undefined
+    return {
+      type: 'tool',
+      ...common,
+      tool_name: record.tool_name,
+      detail: extractToolDetail(record.tool_input, record.cwd),
+    }
+  }
+
+  const type = HOOK_EVENT_TYPES[record.hook_event_name as keyof typeof HOOK_EVENT_TYPES]
+  if (type === undefined) return undefined
+  return { type, ...common }
 }
 
 export function createApp(config: AppConfig) {
   const { eventLog, hookToken, deckToken } = config
   const now = config.now ?? Date.now
+  // Event ids restart at 1 with the process; the bootId is what lets a deck
+  // that stayed open across a gateway restart tell a colliding fresh id from
+  // a duplicate delivery of an old one.
+  const bootId = crypto.randomUUID()
   const tokens: AuthTokens = { hookToken, deckToken }
   const pwaHtml = loadPwaHtml()
   const deckReducerJs = loadDeckReducerJs()
@@ -68,17 +126,33 @@ export function createApp(config: AppConfig) {
     const payload = parseHookPayload(body)
     if (payload === undefined) {
       return c.json(
-        { error: 'expected a Stop or UserPromptSubmit hook payload with session_id and cwd' },
+        {
+          error:
+            'expected a Stop, UserPromptSubmit, or PostToolUse hook payload with session_id and cwd',
+        },
         400,
       )
     }
 
-    const event = eventLog.publish({
-      type: payload.type,
+    const base = {
       sessionId: payload.session_id,
       title: basename(payload.cwd).slice(0, MAX_TITLE_LENGTH),
       cwd: payload.cwd,
-    })
+    }
+    const event =
+      payload.type === 'tool'
+        ? eventLog.publish({
+            type: 'tool',
+            ...base,
+            tool: payload.tool_name,
+            detail: clampDetail(payload.detail),
+            // Classification is command-driven for Bash; every other tool the
+            // matcher registers is a file edit — a routine, dim ticker row.
+            ...(payload.tool_name === 'Bash'
+              ? classifyBash(payload.detail)
+              : { category: 'edit' as const, risk: 'routine' as const }),
+          })
+        : eventLog.publish({ type: payload.type, ...base })
     return c.json({ id: event.id }, 202)
   })
 
@@ -101,7 +175,7 @@ export function createApp(config: AppConfig) {
           void stream.writeSSE({
             id: String(event.id),
             event: event.type,
-            data: JSON.stringify({ ...event, serverNow: now() }),
+            data: JSON.stringify({ ...event, serverNow: now(), bootId }),
           })
         // Snapshot the missed events and subscribe in the same synchronous
         // block: publish() is synchronous, so nothing can slip between them.

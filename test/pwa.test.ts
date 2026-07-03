@@ -40,6 +40,25 @@ describe('PWA shell', () => {
     expect(html).toContain('ambientShift')
   })
 
+  it('renders the activity ticker: tool events reduce into a risk-differentiated VT323 strip', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // Tool events flow through the same pure-reducer path as the clock.
+    expect(html).toContain("addEventListener('tool'")
+    expect(html).toContain('reduceTicker')
+    // D13: ticker lines are VT323, not the display font.
+    expect(html).toContain('VT323')
+    expect(html).toContain('id="ticker"')
+    // Highlighted vs routine rows differ by a data attribute the CSS keys on.
+    expect(html).toContain("data-risk='highlighted'")
+    // Commands are untrusted input — rows must be built with textContent,
+    // never markup interpolation.
+    expect(html).toContain('textContent')
+    expect(html).not.toContain('innerHTML')
+  })
+
   it('serves the deck reducer as a JS module the page can import', async () => {
     const { app } = buildApp()
 

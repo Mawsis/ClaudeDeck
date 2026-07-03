@@ -86,6 +86,41 @@ export function localEventTime(frame, receiptNow) {
   return receiptNow - age
 }
 
+/**
+ * @typedef {{ key: string, tool: string, detail: string, risk: 'highlighted' | 'routine', at: number }} TickerRow
+ */
+
+/** @type {readonly TickerRow[]} */
+export const initialTicker = Object.freeze([])
+
+// A desk-clock strip shows a handful of rows; 20 covers a taller layout
+// while keeping the always-on DOM small.
+const TICKER_CAPACITY = 20
+
+/**
+ * @param {readonly TickerRow[]} ticker newest row first
+ * @param {{ type: string, id: number, at: number, bootId?: string, sessionId?: string,
+ *   title?: string, tool?: string, detail?: string, risk?: string }} event a deck SSE
+ *   frame — external JSON, so tool fields are normalized here rather than trusted.
+ * @returns {readonly TickerRow[]}
+ */
+export function reduceTicker(ticker, event) {
+  if (event.type !== 'tool') return ticker
+  // Reconnect replay is at-least-once; the audit strip must stay exactly-once.
+  // Keyed by (bootId, id): a restarted gateway reuses ids from 1, and those
+  // collisions are new events, not duplicates.
+  const key = `${event.bootId ?? ''}:${event.id}`
+  if (ticker.some((row) => row.key === key)) return ticker
+  const row = {
+    key,
+    tool: String(event.tool ?? ''),
+    detail: String(event.detail ?? ''),
+    risk: event.risk === 'highlighted' ? /** @type {const} */ ('highlighted') : /** @type {const} */ ('routine'),
+    at: event.at,
+  }
+  return [row, ...ticker].slice(0, TICKER_CAPACITY)
+}
+
 // Slow orbit around center; every OLED pixel under the layout gets rest.
 const AMBIENT_ORBIT = Object.freeze([
   { x: 0, y: 0 },
