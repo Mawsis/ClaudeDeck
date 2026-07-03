@@ -52,6 +52,18 @@ describe('event ingest', () => {
     expect(eventLog.history()).toHaveLength(0)
   })
 
+  it('clamps pathological cwd basenames to a bounded title length', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      ...stopPayload,
+      cwd: `/tmp/${'x'.repeat(5000)}`,
+    })
+
+    expect(response.status).toBe(202)
+    expect(eventLog.history()[0]!.title.length).toBeLessThanOrEqual(120)
+  })
+
   it('rejects a payload without a valid Stop shape with 400', async () => {
     const { app, eventLog } = buildApp()
 

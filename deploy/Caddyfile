@@ -1,3 +1,12 @@
 {$DECK_DOMAIN} {
+	# The deck token travels as ?token= (EventSource cannot set headers, D10).
+	# Redact it so access logs never contain a live credential.
+	log {
+		format filter {
+			request>uri query {
+				replace token REDACTED
+			}
+		}
+	}
 	reverse_proxy gateway:8484
 }
