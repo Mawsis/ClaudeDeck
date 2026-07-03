@@ -20,6 +20,17 @@ describe('config generator', () => {
     expect(settings.allowedEnvVars).toContain('CLAUDEDECK_HOOK_TOKEN')
   })
 
+  it('registers a UserPromptSubmit http hook with the same ingest url and env-var auth header', () => {
+    const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com' })
+
+    const promptMatchers = settings.hooks.UserPromptSubmit
+    expect(promptMatchers).toHaveLength(1)
+    const hook = promptMatchers[0]!.hooks[0]!
+    expect(hook.type).toBe('http')
+    expect(hook.url).toBe('https://deck.example.com/api/events')
+    expect(hook.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
+  })
+
   it('normalizes a trailing slash on the gateway url', () => {
     const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com/' })
 

@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+function loadPwaAsset(filename: string): string {
+  return readFileSync(fileURLToPath(new URL(`../pwa/${filename}`, import.meta.url)), 'utf8')
+}
+
 export function loadPwaHtml(): string {
-  return readFileSync(fileURLToPath(new URL('../pwa/index.html', import.meta.url)), 'utf8')
+  return loadPwaAsset('index.html')
+}
+
+export function loadDeckReducerJs(): string {
+  return loadPwaAsset('deck-reducer.js')
 }

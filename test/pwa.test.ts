@@ -11,4 +11,26 @@ describe('PWA shell', () => {
     expect(response.headers.get('content-type')).toContain('text/html')
     expect(await response.text()).toContain('ClaudeDeck')
   })
+
+  it('renders the deck as a dumb projection: imports the reducer, listens to prompt and stop, holds a wake lock', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    expect(html).toContain("from '/deck-reducer.js'")
+    expect(html).toContain("addEventListener('prompt'")
+    expect(html).toContain("addEventListener('stop'")
+    expect(html).toContain('navigator.wakeLock')
+    expect(html).toContain('Press Start 2P')
+  })
+
+  it('serves the deck reducer as a JS module the page can import', async () => {
+    const { app } = buildApp()
+
+    const response = await app.request('/deck-reducer.js')
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('javascript')
+    expect(await response.text()).toContain('export function reduceDeck')
+  })
 })

@@ -72,4 +72,32 @@ describe('event ingest', () => {
     expect(response.status).toBe(400)
     expect(eventLog.history()).toHaveLength(0)
   })
+
+  it('accepts a UserPromptSubmit payload and publishes it as a prompt event', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'UserPromptSubmit',
+      session_id: 'sess-42',
+      cwd: '/Users/mac/Workshop/Personal/my-app',
+    })
+
+    expect(response.status).toBe(202)
+    const events = eventLog.history()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ type: 'prompt', sessionId: 'sess-42', title: 'my-app' })
+  })
+
+  it('rejects hook event names outside Stop and UserPromptSubmit with 400', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'SubagentStop',
+      session_id: 'sess-42',
+      cwd: '/tmp/app',
+    })
+
+    expect(response.status).toBe(400)
+    expect(eventLog.history()).toHaveLength(0)
+  })
 })
