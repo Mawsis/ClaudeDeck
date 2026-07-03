@@ -70,6 +70,44 @@ export function deckView(state, now, { connected = true } = {}) {
   return { mode: 'done', title: active.title, elapsedMs: active.elapsedMs }
 }
 
+/** D11: short conversational turns stay silent — only real work alerts. */
+export const DEFAULT_ALERT_THRESHOLD_MS = 45_000
+
+// A stop older than this at receipt is history, not news: a reloading deck
+// replays the whole ring buffer, and re-pinging an already-delivered alert
+// would be a lie. Wide enough to cover a few EventSource retry cycles.
+export const MAX_ALERT_AGE_MS = 10_000
+
+/**
+ * @typedef {{ channel: 'in-page' | 'push', title: string, elapsedMs: number }} AlertDecision
+ */
+
+/**
+ * Decide whether a deck event warrants a completion alert, and on which
+ * channel. Evaluated against the state *before* the event is reduced.
+ *
+ * @param {DeckState} state
+ * @param {DeckEvent} event
+ * @param {{ thresholdMs?: number, visible?: boolean, now?: number }} [options]
+ *   `now` is the receipt-time reading of the same clock as `event.at` —
+ *   omitted only where events are consumed live (age always zero).
+ * @returns {AlertDecision | null}
+ */
+export function completionAlert(state, event, options = {}) {
+  const { thresholdMs = DEFAULT_ALERT_THRESHOLD_MS, visible = false, now } = options
+  if (event.type !== 'stop') return null
+  if (now !== undefined && now - event.at > MAX_ALERT_AGE_MS) return null
+  const previous = state.sessions[event.sessionId]
+  if (previous?.status !== 'running') return null
+  const elapsedMs = event.at - previous.since
+  if (elapsedMs < thresholdMs) return null
+  return {
+    channel: visible ? /** @type {const} */ ('in-page') : /** @type {const} */ ('push'),
+    title: event.title,
+    elapsedMs,
+  }
+}
+
 /**
  * Rebase a frame's event time onto this device's clock. The gateway stamps
  * every frame with `serverNow`, so `serverNow - at` is the event's age — a

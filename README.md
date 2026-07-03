@@ -20,6 +20,14 @@ round trip) feed a bounded audit strip. A table-driven classifier highlights
 high-impact Bash commands (installs, migrations, docker, pushes, deploys);
 everything else renders as a dim one-liner.
 
+**Completion alerts** stay meaningful: the shared reducer decides them, and a
+`Stop` alerts only when the turn ran at least the threshold (45s default,
+`CLAUDEDECK_ALERT_THRESHOLD_MS` to change) — short chat turns stay silent.
+Channel follows visibility: a visible deck gets a green boundary flash and a
+vibration tap; a backgrounded or locked phone gets a Web Push notification
+carrying the session title (enable by setting the VAPID variables from
+`deploy/.env.example` — without them, only in-page alerts fire).
+
 ## Develop
 
 ```bash

@@ -1,16 +1,28 @@
 import { basename } from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
+import { completionAlert, DEFAULT_ALERT_THRESHOLD_MS, initialDeckState, reduceDeck } from '../pwa/deck-reducer.js'
 import { requireScope, type AuthTokens } from './auth.ts'
 import { classifyBash } from './bash-classifier.ts'
 import type { EventLog } from './event-log.ts'
 import type { DeckEvent } from './events.ts'
-import { loadDeckReducerJs, loadPwaHtml } from './static.ts'
+import { createPushRegistry, type PushSender, type PushSubscriptionJson } from './push-registry.ts'
+import { loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
+
+export type { PushSender, PushSubscriptionJson } from './push-registry.ts'
+
+export type AlertsConfig = {
+  readonly thresholdMs?: number
+  readonly vapidPublicKey?: string
+  /** Absent → Web Push disabled; the deck's in-page alerts are unaffected. */
+  readonly sendPush?: PushSender
+}
 
 export type AppConfig = AuthTokens & {
   readonly eventLog: EventLog
   readonly maxStreamClients?: number
   readonly now?: () => number
+  readonly alerts?: AlertsConfig
 }
 
 const DEFAULT_MAX_STREAM_CLIENTS = 8
@@ -75,6 +87,27 @@ function parseLastEventId(header: string | undefined): number {
   return Number.isSafeInteger(id) && id >= 0 ? id : Infinity
 }
 
+/** Push service endpoints are always https; anything else is an SSRF target. */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function parsePushSubscription(body: unknown): PushSubscriptionJson | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const record = body as Record<string, unknown>
+  if (typeof record.endpoint !== 'string' || !isHttpsUrl(record.endpoint)) return undefined
+  if (typeof record.keys !== 'object' || record.keys === null) return undefined
+  const keys = record.keys as Record<string, unknown>
+  if (typeof keys.p256dh !== 'string' || keys.p256dh === '') return undefined
+  if (typeof keys.auth !== 'string' || keys.auth === '') return undefined
+  // Browsers attach extras (expirationTime); only what web-push needs is kept.
+  return { endpoint: record.endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } }
+}
+
 function parseHookPayload(body: unknown): HookPayload | undefined {
   if (typeof body !== 'object' || body === null) return undefined
   const record = body as Record<string, unknown>
@@ -107,12 +140,32 @@ export function createApp(config: AppConfig) {
   const tokens: AuthTokens = { hookToken, deckToken }
   const pwaHtml = loadPwaHtml()
   const deckReducerJs = loadDeckReducerJs()
+  const serviceWorkerJs = loadServiceWorkerJs()
   const app = new Hono()
+
+  const alertThresholdMs = config.alerts?.thresholdMs ?? DEFAULT_ALERT_THRESHOLD_MS
+  const sendPush = config.alerts?.sendPush
+  const pushRegistry = sendPush === undefined ? undefined : createPushRegistry(sendPush)
+
+  // The gateway mirrors the deck's state through the same pure reducer; when
+  // the deck is dark, this is where the alert decision still gets made.
+  let deckState = initialDeckState
+  eventLog.subscribe((event) => {
+    if (event.type !== 'prompt' && event.type !== 'stop') return
+    const alert = completionAlert(deckState, event, { thresholdMs: alertThresholdMs })
+    deckState = reduceDeck(deckState, event)
+    if (alert === null || pushRegistry === undefined) return
+    pushRegistry.broadcast(JSON.stringify({ title: alert.title, elapsedMs: alert.elapsedMs }))
+  })
 
   app.get('/', (c) => c.html(pwaHtml))
 
   app.get('/deck-reducer.js', (c) =>
     c.body(deckReducerJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }),
+  )
+
+  app.get('/sw.js', (c) =>
+    c.body(serviceWorkerJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }),
   )
 
   app.post('/api/events', requireScope('hook', tokens), async (c) => {
@@ -154,6 +207,34 @@ export function createApp(config: AppConfig) {
           })
         : eventLog.publish({ type: payload.type, ...base })
     return c.json({ id: event.id }, 202)
+  })
+
+  app.get('/api/deck-config', requireScope('deck', tokens), (c) =>
+    c.json({
+      alertThresholdMs,
+      vapidPublicKey: config.alerts?.vapidPublicKey ?? null,
+    }),
+  )
+
+  app.post('/api/push/subscriptions', requireScope('deck', tokens), async (c) => {
+    let body: unknown
+    try {
+      body = await c.req.json()
+    } catch {
+      return c.json({ error: 'body must be JSON' }, 400)
+    }
+
+    const subscription = parsePushSubscription(body)
+    if (subscription === undefined) {
+      return c.json(
+        { error: 'expected a Web Push subscription with endpoint and keys.p256dh/keys.auth' },
+        400,
+      )
+    }
+
+    // The deck re-registers on every connect — registration is idempotent.
+    pushRegistry?.register(subscription)
+    return c.json({ ok: true }, 201)
   })
 
   const maxStreamClients = config.maxStreamClients ?? DEFAULT_MAX_STREAM_CLIENTS

@@ -163,6 +163,16 @@ token, so a forced rebrand is an asset swap, not a refactor.
   file path) — no blind approvals.
 - All ClaudeDeck state is in-memory; a gateway restart loses only ticker history and any
   pending prompt (which then falls back per D4).
+- D11's channel selection is enforced on the phone, at delivery time: the gateway pushes
+  every threshold-crossing stop (it mirrors deck state through the same pure reducer), and
+  the service worker drops the notification when a deck window is visible — the page has
+  already flashed. Visibility is only truthfully known on the phone at the moment the alert
+  would render; reporting it to the gateway would be stale the instant the screen locks.
+  A dead subscription (push service 404/410) is pruned; transient send failures are not.
+- Alerts are news, not history: a stop older than ~10s at receipt never alerts. A reloading
+  deck (no `Last-Event-ID`) replays the whole ring buffer — the clock absorbs it silently
+  and only near-live stops flash. The gateway's push decision consumes live events only,
+  so it needs no such guard.
 
 ## Spec corrections
 

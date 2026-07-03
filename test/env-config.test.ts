@@ -36,4 +36,51 @@ describe('env config', () => {
       }),
     ).toThrow(/identical/)
   })
+
+  it('defaults the alert threshold to 45s and honors an override', () => {
+    expect(loadConfigFromEnv(validEnv).alertThresholdMs).toBe(45_000)
+    expect(
+      loadConfigFromEnv({ ...validEnv, CLAUDEDECK_ALERT_THRESHOLD_MS: '90000' }).alertThresholdMs,
+    ).toBe(90_000)
+  })
+
+  it('rejects a malformed alert threshold, naming the variable', () => {
+    for (const bad of ['soon', '-1', '0']) {
+      expect(() =>
+        loadConfigFromEnv({ ...validEnv, CLAUDEDECK_ALERT_THRESHOLD_MS: bad }),
+      ).toThrow(/CLAUDEDECK_ALERT_THRESHOLD_MS/)
+    }
+  })
+
+  it('runs without VAPID keys — push disabled, deck alerts still work', () => {
+    expect(loadConfigFromEnv(validEnv).vapid).toBeUndefined()
+  })
+
+  it('loads the VAPID trio when fully configured', () => {
+    const config = loadConfigFromEnv({
+      ...validEnv,
+      CLAUDEDECK_VAPID_PUBLIC_KEY: 'pub-key',
+      CLAUDEDECK_VAPID_PRIVATE_KEY: 'priv-key',
+      CLAUDEDECK_VAPID_SUBJECT: 'mailto:owner@example.com',
+    })
+
+    expect(config.vapid).toEqual({
+      publicKey: 'pub-key',
+      privateKey: 'priv-key',
+      subject: 'mailto:owner@example.com',
+    })
+  })
+
+  it('fails fast on a partial VAPID trio, naming what is missing', () => {
+    expect(() =>
+      loadConfigFromEnv({ ...validEnv, CLAUDEDECK_VAPID_PUBLIC_KEY: 'pub-key' }),
+    ).toThrow(/CLAUDEDECK_VAPID_PRIVATE_KEY/)
+    expect(() =>
+      loadConfigFromEnv({
+        ...validEnv,
+        CLAUDEDECK_VAPID_PUBLIC_KEY: 'pub-key',
+        CLAUDEDECK_VAPID_PRIVATE_KEY: 'priv-key',
+      }),
+    ).toThrow(/CLAUDEDECK_VAPID_SUBJECT/)
+  })
 })

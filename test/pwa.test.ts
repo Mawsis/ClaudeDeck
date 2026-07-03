@@ -68,4 +68,38 @@ describe('PWA shell', () => {
     expect(response.headers.get('content-type')).toContain('javascript')
     expect(await response.text()).toContain('export function reduceDeck')
   })
+
+  it('serves a service worker that shows pushes only when no deck window is visible', async () => {
+    const { app } = buildApp()
+
+    const response = await app.request('/sw.js')
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('javascript')
+    const sw = await response.text()
+    expect(sw).toContain("addEventListener('push'")
+    // Delivery-time visibility check: a visible deck flashes in-page instead.
+    expect(sw).toContain('visibilityState')
+    expect(sw).toContain('showNotification')
+    expect(sw).toContain("addEventListener('notificationclick'")
+  })
+
+  it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The channel decision is the reducer's, fed the page's real visibility
+    // and receipt time (so ring-buffer replay on reload never re-alerts).
+    expect(html).toContain('completionAlert')
+    expect(html).toContain('document.visibilityState')
+    expect(html).toContain('now: receiptNow')
+    expect(html).toContain('navigator.vibrate')
+    expect(html).toContain('alert-flash')
+    // Threshold and VAPID key come from the gateway, not page constants.
+    expect(html).toContain('/api/deck-config')
+    // Subscriptions are held in gateway memory — every connect re-registers.
+    expect(html).toContain('/api/push/subscriptions')
+    expect(html).toContain('serviceWorker')
+  })
 })
