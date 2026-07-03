@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ambientShift,
   deckView,
   formatElapsed,
   formatTimeOfDay,
@@ -98,6 +99,33 @@ describe('deck reducer', () => {
     expect(deckView(redelivered, 25_000)).toEqual({ mode: 'done', title: 'my-app', elapsedMs: 10_000 })
   })
 
+  it('projects offline instead of a stale clock while the stream is down, even mid-session', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+
+    expect(deckView(running, 60_000, { connected: false })).toEqual({ mode: 'offline' })
+    expect(deckView(initialDeckState, 60_000, { connected: false })).toEqual({ mode: 'offline' })
+  })
+
+  it('returns to the truthful view the moment the stream is back', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+
+    expect(deckView(running, 60_000, { connected: true })).toEqual({
+      mode: 'running',
+      title: 'my-app',
+      elapsedMs: 50_000,
+    })
+  })
+
   it('reports an unknown duration for a stop with no observed prompt', () => {
     const state = reduceDeck(initialDeckState, {
       type: 'stop',
@@ -107,6 +135,33 @@ describe('deck reducer', () => {
     })
 
     expect(deckView(state, 10_000)).toEqual({ mode: 'done', title: 'my-app', elapsedMs: null })
+  })
+})
+
+describe('ambient pixel shift', () => {
+  it('stays within a few pixels of center — the layout drifts, it never jumps', () => {
+    for (let minute = 0; minute < 600; minute++) {
+      const { x, y } = ambientShift(minute)
+      expect(Math.abs(x)).toBeLessThanOrEqual(8)
+      expect(Math.abs(y)).toBeLessThanOrEqual(8)
+    }
+  })
+
+  it('moves every minute and revisits positions only on a cycle — no two adjacent minutes match', () => {
+    const positions = new Set()
+    for (let minute = 0; minute < 60; minute++) {
+      const current = ambientShift(minute)
+      const next = ambientShift(minute + 1)
+      expect(current).not.toEqual(next)
+      positions.add(`${current.x},${current.y}`)
+    }
+    // Burn-in protection needs real coverage, not a two-spot toggle.
+    expect(positions.size).toBeGreaterThanOrEqual(4)
+  })
+
+  it('is a pure function of the minute index', () => {
+    expect(ambientShift(17)).toEqual(ambientShift(17))
+    expect(ambientShift(0)).toEqual(ambientShift(0))
   })
 })
 

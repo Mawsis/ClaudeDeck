@@ -53,4 +53,43 @@ describe('tracer: Stop hook to deck', () => {
 
     controller.abort()
   })
+
+  it('catches up after a network blip: a Stop missed while offline arrives on reconnect', async () => {
+    const postEvent = (hookEventName: string, sessionId: string, cwd: string) =>
+      fetch(`${baseUrl}/api/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${HOOK_TOKEN}`,
+        },
+        body: JSON.stringify({ hook_event_name: hookEventName, session_id: sessionId, cwd }),
+      })
+
+    // Connected deck sees the prompt land.
+    const first = new AbortController()
+    const firstStream = await fetch(`${baseUrl}/api/stream?token=${DECK_TOKEN}`, {
+      signal: first.signal,
+    })
+    const firstReader = firstStream.body!.getReader()
+    await postEvent('UserPromptSubmit', 'sess-blip', '/w/blip-app')
+    const seenFrame = new TextDecoder().decode((await firstReader.read()).value)
+    const lastSeenId = /id: (\d+)/.exec(seenFrame)![1]
+
+    // Network blip: the deck drops; the session stops while nobody is listening.
+    first.abort()
+    await postEvent('Stop', 'sess-blip', '/w/blip-app')
+
+    // EventSource reconnects with the last seen id — the missed Stop arrives.
+    const second = new AbortController()
+    const secondStream = await fetch(`${baseUrl}/api/stream?token=${DECK_TOKEN}`, {
+      headers: { 'Last-Event-ID': lastSeenId! },
+      signal: second.signal,
+    })
+    const secondReader = secondStream.body!.getReader()
+    const catchUpFrame = new TextDecoder().decode((await secondReader.read()).value)
+
+    expect(catchUpFrame).toContain('event: stop')
+    expect(catchUpFrame).toContain('"sessionId":"sess-blip"')
+    second.abort()
+  })
 })

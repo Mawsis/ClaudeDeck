@@ -9,4 +9,6 @@ export type DeckEventInput = {
 
 export type DeckEvent = DeckEventInput & {
   readonly id: number
+  /** Server publish time (epoch ms) — replayed events must not inherit receipt time. */
+  readonly at: number
 }

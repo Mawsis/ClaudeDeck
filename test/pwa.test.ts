@@ -24,6 +24,21 @@ describe('PWA shell', () => {
     expect(html).toContain('Press Start 2P')
   })
 
+  it('never lies: renders from connection state, server event times, and a shifting layout', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // Connection state flows into the projection — offline replaces the clock.
+    expect(html).toContain('connected')
+    expect(html).toMatch(/source\.onopen/)
+    expect(html).toMatch(/source\.onerror/)
+    // Reducer consumes the server publish time, not client receipt time.
+    expect(html).toContain('at: event.at')
+    // OLED burn-in protection: the layout drifts on a minute index.
+    expect(html).toContain('ambientShift')
+  })
+
   it('serves the deck reducer as a JS module the page can import', async () => {
     const { app } = buildApp()
 

@@ -10,7 +10,8 @@
  * @typedef {{ activeSessionId: string | null, sessions: Readonly<Record<string, SessionState>> }} DeckState
  * @typedef {{ mode: 'idle' }
  *   | { mode: 'running', title: string, elapsedMs: number }
- *   | { mode: 'done', title: string, elapsedMs: number | null }} DeckView
+ *   | { mode: 'done', title: string, elapsedMs: number | null }
+ *   | { mode: 'offline' }} DeckView
  */
 
 /** @type {DeckState} */
@@ -55,15 +56,39 @@ export function reduceDeck(state, event) {
 /**
  * @param {DeckState} state
  * @param {number} now
+ * @param {{ connected?: boolean }} [connection] A down stream always projects
+ *   offline — a stale clock is a lie the deck must never tell.
  * @returns {DeckView}
  */
-export function deckView(state, now) {
+export function deckView(state, now, { connected = true } = {}) {
+  if (!connected) return { mode: 'offline' }
   const active = state.activeSessionId === null ? undefined : state.sessions[state.activeSessionId]
   if (active === undefined) return { mode: 'idle' }
   if (active.status === 'running') {
     return { mode: 'running', title: active.title, elapsedMs: now - active.since }
   }
   return { mode: 'done', title: active.title, elapsedMs: active.elapsedMs }
+}
+
+// Slow orbit around center; every OLED pixel under the layout gets rest.
+const AMBIENT_ORBIT = Object.freeze([
+  { x: 0, y: 0 },
+  { x: 4, y: -2 },
+  { x: 7, y: 2 },
+  { x: 4, y: 5 },
+  { x: 0, y: 7 },
+  { x: -4, y: 5 },
+  { x: -7, y: 2 },
+  { x: -4, y: -2 },
+  { x: 0, y: -5 },
+])
+
+/**
+ * @param {number} minuteIndex
+ * @returns {{ x: number, y: number }} whole-pixel layout offset for this minute
+ */
+export function ambientShift(minuteIndex) {
+  return AMBIENT_ORBIT[Math.abs(minuteIndex) % AMBIENT_ORBIT.length] ?? { x: 0, y: 0 }
 }
 
 /** @param {number} value */
