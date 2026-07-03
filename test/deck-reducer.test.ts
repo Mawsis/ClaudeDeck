@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ambientShift,
+  completionAlert,
   deckView,
   formatElapsed,
   formatTimeOfDay,
@@ -136,6 +137,151 @@ describe('deck reducer', () => {
     })
 
     expect(deckView(state, 10_000)).toEqual({ mode: 'done', title: 'my-app', elapsedMs: null })
+  })
+})
+
+describe('completion alerts', () => {
+  it('decides a push alert for a longer-than-threshold turn while the deck is hidden', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+
+    const alert = completionAlert(
+      running,
+      { type: 'stop', sessionId: 's1', title: 'my-app', at: 70_000 },
+      { visible: false },
+    )
+
+    expect(alert).toEqual({ channel: 'push', title: 'my-app', elapsedMs: 60_000 })
+  })
+
+  it('stays silent for a sub-threshold turn — short chat turns must not ping', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+
+    const alert = completionAlert(running, {
+      type: 'stop',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 20_000,
+    })
+
+    expect(alert).toBeNull()
+  })
+
+  it('chooses the in-page channel while the deck is visible — flash and vibrate, not push', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+
+    const alert = completionAlert(
+      running,
+      { type: 'stop', sessionId: 's1', title: 'my-app', at: 70_000 },
+      { visible: true },
+    )
+
+    expect(alert).toEqual({ channel: 'in-page', title: 'my-app', elapsedMs: 60_000 })
+  })
+
+  it('honors a configured threshold in both directions', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 0,
+    })
+    const stop = { type: 'stop', sessionId: 's1', title: 'my-app', at: 10_000 } as const
+
+    expect(completionAlert(running, stop, { thresholdMs: 5_000 })).toMatchObject({
+      elapsedMs: 10_000,
+    })
+    expect(completionAlert(running, stop, { thresholdMs: 15_000 })).toBeNull()
+  })
+
+  it('alerts a turn that ran exactly the threshold — "at least", not "longer than"', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 0,
+    })
+
+    const alert = completionAlert(running, {
+      type: 'stop',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 45_000,
+    })
+
+    expect(alert).toMatchObject({ channel: 'push' })
+  })
+
+  it('never re-alerts a redelivered stop — replay is at-least-once, alerts are exactly-once', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 0,
+    })
+    const stop = { type: 'stop', sessionId: 's1', title: 'my-app', at: 60_000 } as const
+    const done = reduceDeck(running, stop)
+
+    expect(completionAlert(running, stop)).not.toBeNull()
+    expect(completionAlert(done, { ...stop, at: 65_000 })).toBeNull()
+  })
+
+  it('stays silent on a stop with no observed prompt — an unknown duration cannot clear the threshold', () => {
+    const alert = completionAlert(initialDeckState, {
+      type: 'stop',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 60_000,
+    })
+
+    expect(alert).toBeNull()
+  })
+
+  it('never re-fires for a stale replayed stop — a reloaded deck must not re-ping old news', () => {
+    // A fresh page load replays the whole ring buffer with no Last-Event-ID;
+    // the clock must absorb the history, but only near-live stops are news.
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 0,
+    })
+    const stop = { type: 'stop', sessionId: 's1', title: 'my-app', at: 60_000 } as const
+
+    expect(completionAlert(running, stop, { now: 600_000 })).toBeNull()
+    expect(completionAlert(running, stop, { now: 62_000 })).not.toBeNull()
+  })
+
+  it('ignores non-stop events', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 0,
+    })
+
+    const alert = completionAlert(running, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 60_000,
+    })
+
+    expect(alert).toBeNull()
   })
 })
 

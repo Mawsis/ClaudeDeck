@@ -6,6 +6,13 @@ services:
     environment:
       CLAUDEDECK_HOOK_TOKEN: ${CLAUDEDECK_HOOK_TOKEN:?set CLAUDEDECK_HOOK_TOKEN in deploy/.env}
       CLAUDEDECK_DECK_TOKEN: ${CLAUDEDECK_DECK_TOKEN:?set CLAUDEDECK_DECK_TOKEN in deploy/.env}
+      # Optional: locked-screen completion alerts via Web Push. Generate the
+      # key pair with `npx web-push generate-vapid-keys`; all three or none.
+      CLAUDEDECK_VAPID_PUBLIC_KEY: ${CLAUDEDECK_VAPID_PUBLIC_KEY:-}
+      CLAUDEDECK_VAPID_PRIVATE_KEY: ${CLAUDEDECK_VAPID_PRIVATE_KEY:-}
+      CLAUDEDECK_VAPID_SUBJECT: ${CLAUDEDECK_VAPID_SUBJECT:-}
+      # Optional: turns shorter than this stay silent (default 45000).
+      CLAUDEDECK_ALERT_THRESHOLD_MS: ${CLAUDEDECK_ALERT_THRESHOLD_MS:-}
     expose:
       - "8484"
 

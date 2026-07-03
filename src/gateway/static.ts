@@ -12,3 +12,7 @@ export function loadPwaHtml(): string {
 export function loadDeckReducerJs(): string {
   return loadPwaAsset('deck-reducer.js')
 }
+
+export function loadServiceWorkerJs(): string {
+  return loadPwaAsset('sw.js')
+}
