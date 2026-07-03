@@ -73,6 +73,32 @@ describe('SSE stream', () => {
     },
   )
 
+  it('stamps every frame with serverNow so clients can rebase event age onto their own clock', async () => {
+    let clock = 10_000
+    const eventLog = createEventLog({ now: () => clock })
+    const app = createApp({ hookToken: HOOK_TOKEN, deckToken: DECK_TOKEN, eventLog, now: () => clock })
+    eventLog.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
+    eventLog.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
+
+    // The deck reconnects 60s later: the replayed frame is 60s old.
+    clock = 70_000
+    const response = await app.request(`/api/stream?token=${DECK_TOKEN}`, {
+      headers: { 'Last-Event-ID': '1' },
+    })
+    const reader = response.body!.getReader()
+    const replayed = new TextDecoder().decode((await reader.read()).value)
+    expect(replayed).toContain('"at":10000')
+    expect(replayed).toContain('"serverNow":70000')
+
+    // A live frame has no age: serverNow equals its publish time.
+    clock = 80_000
+    eventLog.publish({ type: 'stop', sessionId: 's1', title: 'a', cwd: '/a' })
+    const live = new TextDecoder().decode((await reader.read()).value)
+    expect(live).toContain('"at":80000')
+    expect(live).toContain('"serverNow":80000')
+    await reader.cancel()
+  })
+
   it('rejects the hook token on the stream — wrong scope', async () => {
     const { app } = buildApp()
 

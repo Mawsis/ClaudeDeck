@@ -9,6 +9,7 @@ import { loadDeckReducerJs, loadPwaHtml } from './static.ts'
 export type AppConfig = AuthTokens & {
   readonly eventLog: EventLog
   readonly maxStreamClients?: number
+  readonly now?: () => number
 }
 
 const DEFAULT_MAX_STREAM_CLIENTS = 8
@@ -44,6 +45,7 @@ function parseHookPayload(body: unknown): HookPayload | undefined {
 
 export function createApp(config: AppConfig) {
   const { eventLog, hookToken, deckToken } = config
+  const now = config.now ?? Date.now
   const tokens: AuthTokens = { hookToken, deckToken }
   const pwaHtml = loadPwaHtml()
   const deckReducerJs = loadDeckReducerJs()
@@ -93,11 +95,13 @@ export function createApp(config: AppConfig) {
         const closed = new Promise<void>((resolve) => {
           finish = resolve
         })
+        // serverNow lets the client turn (serverNow - at) into a clock-skew-free
+        // event age: replayed frames carry their true age, live frames age 0.
         const writeEvent = (event: DeckEvent) =>
           void stream.writeSSE({
             id: String(event.id),
             event: event.type,
-            data: JSON.stringify(event),
+            data: JSON.stringify({ ...event, serverNow: now() }),
           })
         // Snapshot the missed events and subscribe in the same synchronous
         // block: publish() is synchronous, so nothing can slip between them.

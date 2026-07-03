@@ -5,6 +5,7 @@ import {
   formatElapsed,
   formatTimeOfDay,
   initialDeckState,
+  localEventTime,
   reduceDeck,
 } from '../src/pwa/deck-reducer.js'
 
@@ -135,6 +136,41 @@ describe('deck reducer', () => {
     })
 
     expect(deckView(state, 10_000)).toEqual({ mode: 'done', title: 'my-app', elapsedMs: null })
+  })
+})
+
+describe('local event time', () => {
+  it('rebases a replayed event by its server-side age, immune to clock skew', () => {
+    // Published at server time 10s, replayed at server time 70s: the event is
+    // 60s old no matter what either clock reads absolutely.
+    const receiptNow = 1_000_000
+    expect(localEventTime({ at: 10_000, serverNow: 70_000 }, receiptNow)).toBe(940_000)
+  })
+
+  it('treats a live event as happening at receipt time — zero age, zero skew', () => {
+    expect(localEventTime({ at: 80_000, serverNow: 80_000 }, 500_000)).toBe(500_000)
+  })
+
+  it('keeps the timer truthful end-to-end across a blip: replayed prompt, live view', () => {
+    // Deck clock and server clock disagree wildly; the running elapsed time
+    // must still reflect the real 60s that passed on the server.
+    const receiptNow = 1_000_000
+    const state = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: localEventTime({ at: 10_000, serverNow: 70_000 }, receiptNow),
+    })
+
+    expect(deckView(state, receiptNow)).toEqual({
+      mode: 'running',
+      title: 'my-app',
+      elapsedMs: 60_000,
+    })
+  })
+
+  it('falls back to receipt time when a frame carries no serverNow', () => {
+    expect(localEventTime({ at: 10_000 }, 500_000)).toBe(500_000)
   })
 })
 

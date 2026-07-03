@@ -33,8 +33,9 @@ describe('PWA shell', () => {
     expect(html).toContain('connected')
     expect(html).toMatch(/source\.onopen/)
     expect(html).toMatch(/source\.onerror/)
-    // Reducer consumes the server publish time, not client receipt time.
-    expect(html).toContain('at: event.at')
+    // Reducer consumes event times rebased onto the deck's own clock —
+    // replay-truthful without importing server clock skew into the live tick.
+    expect(html).toContain('localEventTime(event')
     // OLED burn-in protection: the layout drifts on a minute index.
     expect(html).toContain('ambientShift')
   })
