@@ -45,4 +45,39 @@ describe('event log', () => {
 
     expect(log.history()).toEqual([second, third])
   })
+
+  it('stamps each event with the publish time so replayed events stay truthful', () => {
+    let clock = 10_000
+    const log = createEventLog({ now: () => clock })
+
+    const first = log.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
+    clock = 55_000
+    const second = log.publish({ type: 'stop', sessionId: 's1', title: 'a', cwd: '/a' })
+
+    expect(first.at).toBe(10_000)
+    expect(second.at).toBe(55_000)
+  })
+
+  it('replays exactly the events after a given id', () => {
+    const log = createEventLog()
+
+    log.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
+    const second = log.publish({ type: 'stop', sessionId: 's1', title: 'a', cwd: '/a' })
+    const third = log.publish({ type: 'prompt', sessionId: 's2', title: 'b', cwd: '/b' })
+
+    expect(log.since(1)).toEqual([second, third])
+    expect(log.since(3)).toEqual([])
+  })
+
+  it('replays only what the ring buffer still holds when older events were evicted', () => {
+    const log = createEventLog({ capacity: 2 })
+
+    log.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
+    log.publish({ type: 'stop', sessionId: 's1', title: 'a', cwd: '/a' })
+    const third = log.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
+    const fourth = log.publish({ type: 'stop', sessionId: 's1', title: 'a', cwd: '/a' })
+
+    // Client last saw id 1; ids 2 fell out of the buffer — only 3 and 4 survive.
+    expect(log.since(1)).toEqual([third, fourth])
+  })
 })

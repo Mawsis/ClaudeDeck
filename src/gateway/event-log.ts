@@ -6,19 +6,21 @@ export type EventLog = {
   publish(input: DeckEventInput): DeckEvent
   subscribe(subscriber: Subscriber): () => void
   history(): readonly DeckEvent[]
+  since(afterId: number): readonly DeckEvent[]
 }
 
 const DEFAULT_CAPACITY = 500
 
-export function createEventLog(options: { capacity?: number } = {}): EventLog {
+export function createEventLog(options: { capacity?: number; now?: () => number } = {}): EventLog {
   const capacity = options.capacity ?? DEFAULT_CAPACITY
+  const now = options.now ?? Date.now
   let nextId = 1
   let buffer: readonly DeckEvent[] = []
   const subscribers = new Set<Subscriber>()
 
   return {
     publish(input) {
-      const event: DeckEvent = Object.freeze({ ...input, id: nextId })
+      const event: DeckEvent = Object.freeze({ ...input, id: nextId, at: now() })
       nextId += 1
       buffer = [...buffer, event].slice(-capacity)
       for (const subscriber of subscribers) {
@@ -34,6 +36,10 @@ export function createEventLog(options: { capacity?: number } = {}): EventLog {
 
     history() {
       return buffer
+    },
+
+    since(afterId) {
+      return buffer.filter((event) => event.id > afterId)
     },
   }
 }

@@ -3,11 +3,16 @@
 Ambient phone-as-deck companion + remote permission control for Claude Code.
 Design record: [DECISIONS.md](DECISIONS.md).
 
-Current state: **ambient session clock** — Claude Code `UserPromptSubmit` and
-`Stop` hooks POST to the gateway, which streams them over SSE to the PWA. The
-deck is a landscape desk clock: time of day while idle, an incrementing session
-timer from the moment a prompt is submitted, frozen on Stop — labeled with the
-session's directory name. Wake Lock keeps the docked screen alive.
+Current state: **ambient session clock that never lies** — Claude Code
+`UserPromptSubmit` and `Stop` hooks POST to the gateway, which streams them
+over SSE to the PWA. The deck is a landscape desk clock: time of day while
+idle, an incrementing session timer from the moment a prompt is submitted,
+frozen on Stop — labeled with the session's directory name. Events are
+server-timestamped and replayed from the ring buffer on reconnect
+(`Last-Event-ID`), so a network blip never leaves the deck stale; while the
+stream is down the deck shows an unmistakable gray scanline OFFLINE state.
+Idle/running render dim for the always-on OLED, and the layout pixel-shifts
+every minute against burn-in. Wake Lock keeps the docked screen alive.
 
 ## Develop
 

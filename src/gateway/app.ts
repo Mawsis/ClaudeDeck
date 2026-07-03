@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { requireScope, type AuthTokens } from './auth.ts'
 import type { EventLog } from './event-log.ts'
+import type { DeckEvent } from './events.ts'
 import { loadDeckReducerJs, loadPwaHtml } from './static.ts'
 
 export type AppConfig = AuthTokens & {
@@ -22,6 +23,13 @@ type HookPayload = {
   readonly type: (typeof HOOK_EVENT_TYPES)[keyof typeof HOOK_EVENT_TYPES]
   readonly session_id: string
   readonly cwd: string
+}
+
+/** A missing or malformed header replays nothing — Infinity is "after everything". */
+function parseLastEventId(header: string | undefined): number {
+  if (header === undefined || header.trim() === '') return Infinity
+  const id = Number(header)
+  return Number.isSafeInteger(id) && id >= 0 ? id : Infinity
 }
 
 function parseHookPayload(body: unknown): HookPayload | undefined {
@@ -85,13 +93,19 @@ export function createApp(config: AppConfig) {
         const closed = new Promise<void>((resolve) => {
           finish = resolve
         })
-        const unsubscribe = eventLog.subscribe((event) => {
+        const writeEvent = (event: DeckEvent) =>
           void stream.writeSSE({
             id: String(event.id),
             event: event.type,
             data: JSON.stringify(event),
           })
-        })
+        // Snapshot the missed events and subscribe in the same synchronous
+        // block: publish() is synchronous, so nothing can slip between them.
+        const missed = eventLog.since(parseLastEventId(c.req.header('Last-Event-ID')))
+        const unsubscribe = eventLog.subscribe(writeEvent)
+        for (const event of missed) {
+          writeEvent(event)
+        }
         const close = () => {
           unsubscribe()
           finish()
