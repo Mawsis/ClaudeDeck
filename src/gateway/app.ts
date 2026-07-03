@@ -1,5 +1,6 @@
 import { basename } from 'node:path'
 import { Hono } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { requireScope, type AuthTokens } from './auth.ts'
 import type { EventLog } from './event-log.ts'
 
@@ -48,6 +49,20 @@ export function createApp(config: AppConfig) {
     })
     return c.json({ id: event.id }, 202)
   })
+
+  app.get('/api/stream', requireScope('deck', tokens), (c) =>
+    streamSSE(c, async (stream) => {
+      const unsubscribe = eventLog.subscribe((event) => {
+        void stream.writeSSE({
+          id: String(event.id),
+          event: event.type,
+          data: JSON.stringify(event),
+        })
+      })
+      stream.onAbort(unsubscribe)
+      await new Promise<void>((resolve) => stream.onAbort(resolve))
+    }),
+  )
 
   return app
 }
