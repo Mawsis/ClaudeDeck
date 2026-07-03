@@ -1,6 +1,6 @@
 import type { BashCategory, BashRisk } from './bash-classifier.ts'
 
-export type DeckEventType = 'prompt' | 'stop' | 'tool'
+export type DeckEventType = 'prompt' | 'stop' | 'tool' | 'permission' | 'permission-resolved'
 
 export type TickerCategory = BashCategory | 'edit'
 
@@ -23,7 +23,35 @@ export type ToolEventInput = {
   readonly risk: BashRisk
 }
 
-export type DeckEventInput = LifecycleEventInput | ToolEventInput
+/** A held permission dialog awaiting the deck's answer — the approval card. */
+export type PermissionEventInput = {
+  readonly type: 'permission'
+  readonly sessionId: string
+  readonly title: string
+  readonly cwd: string
+  readonly promptId: string
+  readonly tool: string
+  readonly detail: string
+}
+
+/** How a held prompt settled; `ask` covers every no-decision path (tap,
+ * silence fallback, no-deck fallback) — the terminal dialog took over. */
+export type PermissionOutcome = 'allow' | 'deny' | 'ask'
+
+export type PermissionResolvedEventInput = {
+  readonly type: 'permission-resolved'
+  readonly sessionId: string
+  readonly title: string
+  readonly cwd: string
+  readonly promptId: string
+  readonly outcome: PermissionOutcome
+}
+
+export type DeckEventInput =
+  | LifecycleEventInput
+  | ToolEventInput
+  | PermissionEventInput
+  | PermissionResolvedEventInput
 
 export type DeckEvent = DeckEventInput & {
   readonly id: number

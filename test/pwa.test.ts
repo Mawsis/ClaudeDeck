@@ -84,6 +84,43 @@ describe('PWA shell', () => {
     expect(sw).toContain("addEventListener('notificationclick'")
   })
 
+  it('renders the approval card as a takeover: prompt events reduce, payload in a real monospace, three tap actions', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // Prompts flow through the same pure-reducer path as everything else.
+    expect(html).toContain("addEventListener('permission'")
+    expect(html).toContain("addEventListener('permission-resolved'")
+    expect(html).toContain('reducePrompts')
+    // D13: the payload — where misreading has consequences — is a crisp real
+    // monospace, never the Press Start 2P / VT323 display fonts.
+    expect(html).toContain('JetBrains Mono')
+    expect(html).toMatch(/#approval-payload\s*{[^}]*JetBrains Mono/)
+    // Three tap actions resolving over plain HTTP (D8).
+    expect(html).toContain('id="approve-allow"')
+    expect(html).toContain('id="approve-deny"')
+    expect(html).toContain('id="approve-ask"')
+    expect(html).toContain('/resolution')
+    // Payload text is untrusted input — textContent only.
+    expect(html).not.toContain('innerHTML')
+    // D11: prompt arrival always alerts — the takeover comes with a buzz.
+    expect(html).toContain('id="approval"')
+  })
+
+  it('service worker renders a permission push distinctly — its own tag, never collapsed into a done alert', async () => {
+    const { app } = buildApp()
+
+    const sw = await (await app.request('/sw.js')).text()
+
+    // A permission prompt blocks a session — it must not overwrite, nor be
+    // overwritten by, a routine done notification.
+    expect(sw).toContain("kind === 'permission'")
+    expect(sw).toContain('claudedeck-permission')
+    expect(sw).toContain('claudedeck-done')
+    expect(sw).toContain('PERMISSION')
+  })
+
   it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {
     const { app } = buildApp()
 

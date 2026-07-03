@@ -6,7 +6,7 @@
 <title>ClaudeDeck</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg: #0c0c0c;
@@ -19,6 +19,9 @@
     --accent-ambient: #a05a22;
     --done-ambient: #47795a;
     --offline: #707070;
+    /* D14: yellow = prompt pending. The takeover is the one surface allowed
+       to sit bright — it exists to be answered, not to be ambient. */
+    --prompt: #facc15;
   }
   * { box-sizing: border-box; margin: 0; }
   body {
@@ -121,6 +124,39 @@
     from { transform: translateY(-0.5em); opacity: 0; }
   }
 
+  /* D16: the approval card is a full-screen takeover — the deck's only job
+     while a prompt blocks a session is to get it answered. */
+  #approval {
+    position: fixed; inset: 0; z-index: 10;
+    background: var(--bg);
+    display: flex; flex-direction: column; gap: 3vmin;
+    padding: 4vmin; border: 4px solid var(--prompt);
+  }
+  #approval-tool {
+    color: var(--prompt); font-size: 3.5vmin; letter-spacing: 0.2em;
+  }
+  #approval-session {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; color: var(--dim);
+  }
+  /* D13: the payload — where misreading has consequences — renders in a
+     crisp real monospace, never the display fonts. */
+  #approval-payload {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    font-size: 2.4vmin; line-height: 1.5; color: #fff;
+    flex: 1; overflow-y: auto; margin: 0;
+    white-space: pre-wrap; word-break: break-all;
+    border: 2px solid var(--dim); padding: 2vmin;
+  }
+  /* D16: side-by-side actions. D15's hold-to-fill Allow lands with #8 —
+     until then Allow is styled hot so a stray tap at least aims eyes at it. */
+  #approval-actions { display: flex; gap: 2vmin; }
+  #approval-actions button { flex: 1; font-size: 2.2vmin; padding: 2.5vmin 1vmin; }
+  #approve-allow { background: var(--prompt); border-color: var(--prompt); color: var(--bg); }
+  #approve-deny, #approve-ask {
+    background: var(--bg); color: var(--dim); border-color: var(--dim);
+  }
+
   form { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
   input, button {
     background: var(--bg); color: #fff; border: 2px solid var(--accent);
@@ -151,6 +187,17 @@
 <ul id="ticker" class="hidden"></ul>
 <div id="alert-flash"></div>
 
+<section id="approval" class="hidden">
+  <div id="approval-tool"></div>
+  <div id="approval-session"></div>
+  <pre id="approval-payload"></pre>
+  <div id="approval-actions">
+    <button id="approve-deny" type="button">DENY</button>
+    <button id="approve-ask" type="button">ASK IN TERMINAL</button>
+    <button id="approve-allow" type="button">ALLOW</button>
+  </div>
+</section>
+
 <script type="module">
   import {
     ambientShift,
@@ -159,9 +206,11 @@
     formatElapsed,
     formatTimeOfDay,
     initialDeckState,
+    initialPrompts,
     initialTicker,
     localEventTime,
     reduceDeck,
+    reducePrompts,
     reduceTicker,
   } from '/deck-reducer.js'
 
@@ -177,9 +226,15 @@
   const tickerEl = document.getElementById('ticker')
 
   const alertFlash = document.getElementById('alert-flash')
+  const approval = document.getElementById('approval')
+  const approvalTool = document.getElementById('approval-tool')
+  const approvalSession = document.getElementById('approval-session')
+  const approvalPayload = document.getElementById('approval-payload')
 
   let state = initialDeckState
   let ticker = initialTicker
+  let prompts = initialPrompts
+  let deckToken = null
   let connected = false
   // Threshold and VAPID key are the gateway's to decide — defaults hold only
   // until the first /api/deck-config fetch succeeds.
@@ -270,6 +325,67 @@
     renderTicker()
   }
 
+  // The approval takeover (D16): render the oldest pending prompt — FIFO, so
+  // the terminal that's been blocked longest gets answered first. A prompt
+  // rendered from reconnect replay is still genuinely open (settled ones
+  // arrive paired with their permission-resolved event), so the buzz is
+  // honest news either way.
+  let shownPromptId = null
+  function renderApproval() {
+    const current = prompts[0]
+    if (current === undefined) {
+      approval.classList.add('hidden')
+      shownPromptId = null
+      return
+    }
+    approval.classList.remove('hidden')
+    approvalTool.textContent = '▲ ' + current.tool
+    approvalSession.textContent = current.title
+    // Command text is untrusted input — textContent only, never markup.
+    approvalPayload.textContent = current.detail
+    if (current.promptId !== shownPromptId) {
+      shownPromptId = current.promptId
+      // D11: prompt arrival always alerts — this is the in-page channel; the
+      // service worker covers the backgrounded one.
+      if ('vibrate' in navigator) navigator.vibrate([200, 80, 200])
+    }
+  }
+
+  function onPromptLifecycleEvent(message) {
+    prompts = reducePrompts(prompts, JSON.parse(message.data))
+    renderApproval()
+  }
+
+  // One resolution in flight at a time: a double tap must not answer the
+  // next card in the queue with the previous card's intent.
+  let resolving = false
+  async function resolveCurrentPrompt(action) {
+    const current = prompts[0]
+    if (current === undefined || resolving) return
+    resolving = true
+    try {
+      await fetch('/api/prompts/' + encodeURIComponent(current.promptId) + '/resolution', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + deckToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+    } catch {
+      // Network hiccup: leave the card up — the gateway's permission-resolved
+      // event (or the 540s fallback) is the truth about whether it settled.
+      resolving = false
+      return
+    }
+    resolving = false
+    // Drop the card locally on any completed round trip: 200 settled it here,
+    // 404 means it settled elsewhere — either way it is no longer pending.
+    prompts = reducePrompts(prompts, { type: 'permission-resolved', promptId: current.promptId })
+    renderApproval()
+  }
+
+  document.getElementById('approve-allow').addEventListener('click', () => resolveCurrentPrompt('allow'))
+  document.getElementById('approve-deny').addEventListener('click', () => resolveCurrentPrompt('deny'))
+  document.getElementById('approve-ask').addEventListener('click', () => resolveCurrentPrompt('ask'))
+
   function vapidKeyBytes(base64url) {
     const padded = base64url + '='.repeat((4 - (base64url.length % 4)) % 4)
     const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
@@ -303,6 +419,7 @@
   }
 
   function connect(token) {
+    deckToken = token
     form.classList.add('hidden')
     deck.classList.remove('hidden')
     tickerEl.classList.remove('hidden')
@@ -326,6 +443,8 @@
     source.addEventListener('prompt', onDeckEvent)
     source.addEventListener('stop', onDeckEvent)
     source.addEventListener('tool', onToolEvent)
+    source.addEventListener('permission', onPromptLifecycleEvent)
+    source.addEventListener('permission-resolved', onPromptLifecycleEvent)
   }
 
   // The OS releases the wake lock whenever the page hides; re-acquire on
