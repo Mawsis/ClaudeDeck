@@ -271,6 +271,44 @@ describe('PWA shell', () => {
     expect(html).toContain('deckConfig.paused')
   })
 
+  it('choreographs state changes through the reducer (D17): one overlay, wipe vs CRT decided by deckTransition', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // Which choreography a change earns is the reducer's decision, computed
+    // from before/after signatures — never keyed off individual DOM events.
+    expect(html).toContain('deckTransition')
+    expect(html).toContain('deckSignature')
+    // One overlay element carries both animations, classed per transition.
+    expect(html).toContain('id="choreo"')
+    expect(html).toMatch(/#choreo\.wipe\s*{[^}]*animation/)
+    expect(html).toMatch(/#choreo\.crt\s*{[^}]*animation/)
+    // Durations flow from the shared budget constants, not CSS literals.
+    expect(html).toContain('STRIPE_WIPE_MS')
+    expect(html).toContain('CRT_CHOREO_MS')
+    // The CRT ceremony uses the D12 four-color palette, not just the accent.
+    expect(html).toMatch(/#choreo\.crt|crt-choreo/)
+    expect(html).toContain('#3b82f6')
+  })
+
+  it('keeps idle near-still (D17): ~30s blink scoped to the idle pose, 1Hz colon pulse from the pure helper', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The blink exists only in idle — running keeps the typing bob, and the
+    // later paused/offline overrides still silence everything.
+    expect(html).toMatch(/body\[data-mode='idle'\][^{]*#clawd\s*{[^}]*clawd-blink/)
+    expect(html).toMatch(/clawd-blink\s+30s/)
+    // The colon pulse is the reducer's word, applied to the idle clock only.
+    expect(html).toContain('pulseColon')
+    // No continuous float loops anywhere: the only infinite animations are
+    // the typing bob, the idle blink, and offline's scanline static.
+    const loops = html.match(/animation:[^;]*infinite/g) ?? []
+    expect(loops).toHaveLength(3)
+  })
+
   it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {
     const { app } = buildApp()
 

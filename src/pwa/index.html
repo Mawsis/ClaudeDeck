@@ -126,6 +126,14 @@
     0%, 100% { transform: translateY(0); }
     50% { transform: translateY(0.6vmin); }
   }
+  /* D17: idle is near-still — Clawd blinks once every ~30s, a two-frame
+     opacity dip, and holds still the rest of the cycle. */
+  body[data-mode='idle'] #clawd { animation: clawd-blink 30s steps(1, end) infinite; }
+  @keyframes clawd-blink {
+    0%, 98.9% { opacity: 0.85; }
+    99% { opacity: 0.35; }
+    99.5%, 100% { opacity: 0.85; }
+  }
   /* Paused and offline out-rank running's accent — they must stop its motion
      too, or a paused (or disconnected) running session would keep bobbing. */
   body[data-paused='true'] #clawd { animation: none; }
@@ -146,6 +154,40 @@
       opacity: 0;
       box-shadow: inset 0 0 0 6px var(--done), inset 0 0 14vmin rgba(74, 222, 128, 0);
     }
+  }
+
+  /* D17: the transition overlay. One element carries both choreographies —
+     which one fires is deckTransition's call; JS sets the durations from the
+     shared budget constants (--wipe-ms / --crt-ms). The overlay is additive
+     on top of an already-repainted state, so legibility is never delayed. */
+  #choreo { position: fixed; inset: 0; pointer-events: none; z-index: 20; opacity: 0; }
+  /* The everyday stripe-wipe: one accent band sweeps down in chunky steps. */
+  #choreo.wipe {
+    background: linear-gradient(
+      180deg, transparent 0 40%, var(--accent) 40% 60%, transparent 60% 100%
+    );
+    background-size: 100% 24vmin;
+    background-repeat: no-repeat;
+    animation: stripe-wipe var(--wipe-ms, 400ms) steps(10, end);
+  }
+  @keyframes stripe-wipe {
+    0% { opacity: 0.5; background-position-y: -24vmin; }
+    100% { opacity: 0.5; background-position-y: 100vh; }
+  }
+  /* The full CRT ceremony — prompt arrival only: the D12 four-color stripe
+     stack rolls through, then the screen settles. */
+  #choreo.crt {
+    background: repeating-linear-gradient(
+      180deg,
+      #FF6B00 0 3vmin, #4ade80 3vmin 6vmin, #3b82f6 6vmin 9vmin, #a855f7 9vmin 12vmin,
+      transparent 12vmin 24vmin
+    );
+    animation: crt-choreo var(--crt-ms, 560ms) steps(14, end);
+  }
+  @keyframes crt-choreo {
+    0% { opacity: 0.85; background-position-y: -24vmin; }
+    60% { opacity: 0.85; }
+    100% { opacity: 0; background-position-y: 100vh; }
   }
 
   /* Activity ticker (D7, D16): bottom strip, VT323 (D13), newest row first.
@@ -270,6 +312,7 @@
 
 <ul id="ticker" class="hidden"></ul>
 <div id="alert-flash"></div>
+<div id="choreo"></div>
 
 <section id="approval" class="hidden">
   <div id="approval-header">
@@ -300,6 +343,9 @@
     clawdPose,
     clawdSprite,
     completionAlert,
+    CRT_CHOREO_MS,
+    deckSignature,
+    deckTransition,
     deckView,
     formatElapsed,
     formatTimeOfDay,
@@ -307,10 +353,12 @@
     initialPrompts,
     initialTicker,
     localEventTime,
+    pulseColon,
     queueBadge,
     reduceDeck,
     reducePrompts,
     reduceTicker,
+    STRIPE_WIPE_MS,
   } from '/deck-reducer.js'
 
   const TOKEN_KEY = 'claudedeck_deck_token'
@@ -345,10 +393,34 @@
   // until the first /api/deck-config fetch succeeds.
   let deckConfig = { alertThresholdMs: undefined, vapidPublicKey: null }
 
+  // D17: the transition overlay. Which choreography (if any) a repaint earns
+  // is deckTransition's call, judged on before/after state signatures — the
+  // CRT ceremony can only ever fire on prompt arrival, from any code path.
+  const choreo = document.getElementById('choreo')
+  choreo.style.setProperty('--wipe-ms', STRIPE_WIPE_MS + 'ms')
+  choreo.style.setProperty('--crt-ms', CRT_CHOREO_MS + 'ms')
+  let lastSignature = deckSignature(deckView(state, Date.now(), { connected }), false)
+  let choreoTimer = null
+  function choreograph(view) {
+    const signature = deckSignature(view, prompts.length > 0)
+    const transition = deckTransition(lastSignature, signature)
+    lastSignature = signature
+    if (transition === null) return
+    // Restart cleanly even mid-animation: drop, reflow, re-class.
+    clearTimeout(choreoTimer)
+    choreo.className = ''
+    void choreo.offsetWidth
+    choreo.className = transition
+    choreoTimer = setTimeout(() => {
+      choreo.className = ''
+    }, transition === 'crt' ? CRT_CHOREO_MS : STRIPE_WIPE_MS)
+  }
+
   // Dumb projection: every visible pixel derives from deckView — no timing
   // or session logic lives on this side of the reducer.
   function render() {
     const view = deckView(state, Date.now(), { connected })
+    choreograph(view)
     document.body.dataset.mode = view.mode
     // D5/D14: the paused flag drives the purple accent through CSS; the control
     // itself reports the inverse action. Both derive from the reducer view —
@@ -360,7 +432,8 @@
       sessionTitle.textContent = ''
       modeLabel.textContent = 'OFFLINE'
     } else if (view.mode === 'idle') {
-      digits.textContent = formatTimeOfDay(new Date())
+      // D17: the idle clock's only life is the 1Hz colon pulse.
+      digits.textContent = pulseColon(formatTimeOfDay(new Date()), Date.now())
       sessionTitle.textContent = ''
       modeLabel.textContent = 'IDLE'
     } else {
@@ -533,6 +606,10 @@
   function onPromptLifecycleEvent(message) {
     prompts = reducePrompts(prompts, JSON.parse(message.data))
     renderApproval()
+    // The prompt queue is part of the state signature — render now so the
+    // CRT choreography (and Clawd's alarm) fire with the card, not on the
+    // next half-second tick.
+    render()
   }
 
   // One resolution in flight at a time: a double tap must not answer the

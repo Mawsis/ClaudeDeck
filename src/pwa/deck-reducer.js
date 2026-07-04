@@ -316,6 +316,45 @@ export function clawdPose(view, promptPending = false) {
   return 'sleeping'
 }
 
+/**
+ * @typedef {{ mode: DeckView['mode'], paused: boolean, promptPending: boolean }} DeckSignature
+ * @typedef {'crt' | 'wipe'} DeckTransition
+ */
+
+/**
+ * The deck's visible state, reduced to what a transition can be judged on.
+ *
+ * @param {DeckView} view
+ * @param {boolean} promptPending a takeover card is up
+ * @returns {DeckSignature}
+ */
+export function deckSignature(view, promptPending) {
+  return { mode: view.mode, paused: view.paused === true, promptPending }
+}
+
+/** D17: the everyday stripe-wipe — brisk enough to never delay legibility. */
+export const STRIPE_WIPE_MS = 400
+
+/** D17: the full multi-stripe CRT ceremony still lands inside the budget. */
+export const CRT_CHOREO_MS = 560
+
+/**
+ * D17: which choreography a state change earns. The full CRT choreography
+ * fires on exactly one event — prompt arrival.
+ *
+ * @param {DeckSignature} before
+ * @param {DeckSignature} after
+ * @returns {DeckTransition | null}
+ */
+export function deckTransition(before, after) {
+  if (!before.promptPending && after.promptPending) return 'crt'
+  const changed =
+    before.mode !== after.mode ||
+    before.paused !== after.paused ||
+    before.promptPending !== after.promptPending
+  return changed ? 'wipe' : null
+}
+
 // Every brand asset — starburst icon, Clawd sprites — resolves through this
 // one directory. A rebrand is an asset swap behind these tokens, never a
 // component-code change.
@@ -360,4 +399,16 @@ export function formatElapsed(elapsedMs) {
  */
 export function formatTimeOfDay(date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/**
+ * D17: the idle clock's 1Hz colon pulse — visible one half-second, hidden the
+ * next. The hidden colon becomes a space so the digits never shift column.
+ *
+ * @param {string} text a clock string like `14:05`
+ * @param {number} now
+ * @returns {string}
+ */
+export function pulseColon(text, now) {
+  return Math.floor(now / 500) % 2 === 0 ? text : text.replace(':', ' ')
 }
