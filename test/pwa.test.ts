@@ -108,6 +108,22 @@ describe('PWA shell', () => {
     expect(html).toContain('id="approval"')
   })
 
+  it('recovers from a rejected token: a definitive 401/403 clears the saved token and re-shows the form', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // EventSource hides HTTP status — a dead gateway and a rejected token
+    // look identical from onerror. The page must probe an authenticated
+    // endpoint to tell them apart…
+    expect(html).toContain('401')
+    expect(html).toContain('403')
+    // …and a rejected token is cleared, never silently retried forever:
+    // the paste form comes back instead of a stuck OFFLINE clock.
+    expect(html).toContain('removeItem')
+    expect(html).toContain('rejected')
+  })
+
   it('accident-proofs Allow (D15): risk-scaled hold-to-fill, cancel on release, Deny and Ask stay single taps', async () => {
     const { app } = buildApp()
 

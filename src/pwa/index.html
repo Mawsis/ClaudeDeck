@@ -496,6 +496,34 @@
     // EventSource reconnects on its own and resends Last-Event-ID — the
     // gateway replays whatever the deck missed while the stream was down.
     const source = new EventSource('/api/stream?token=' + encodeURIComponent(token))
+
+    // EventSource hides HTTP status, so a rejected token and a dead gateway
+    // both land in onerror — but only one of them can ever recover. Probe an
+    // authenticated endpoint: a definitive 401/403 means retrying is a lie,
+    // so the saved token is cleared and the paste form comes back.
+    let probing = false
+    async function dropRejectedToken() {
+      if (probing) return
+      probing = true
+      try {
+        const response = await fetch('/api/deck-config', {
+          headers: { Authorization: 'Bearer ' + token },
+        })
+        if (response.status === 401 || response.status === 403) {
+          source.close()
+          localStorage.removeItem(TOKEN_KEY)
+          deck.classList.add('hidden')
+          tickerEl.classList.add('hidden')
+          form.classList.remove('hidden')
+          status.textContent = 'deck token rejected — paste a current one'
+          return
+        }
+      } catch {
+        // Gateway unreachable — the stream's own retry loop is the truth.
+      }
+      probing = false
+    }
+
     source.onopen = () => {
       connected = true
       status.textContent = 'connected'
@@ -506,6 +534,7 @@
       connected = false
       status.textContent = 'disconnected — retrying'
       render()
+      dropRejectedToken()
     }
     source.addEventListener('prompt', onDeckEvent)
     source.addEventListener('stop', onDeckEvent)
