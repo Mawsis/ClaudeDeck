@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ClaudeDeck</title>
+<!-- Brand assets live in /brand — a rebrand swaps that directory's files. -->
+<link rel="icon" type="image/svg+xml" href="/brand/icon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -109,6 +111,27 @@
   body[data-mode='offline'] #pause-toggle { color: var(--offline); border-color: var(--offline); }
 
   #status { position: fixed; bottom: 2vmin; font-size: 2vmin; opacity: 0.6; }
+
+  /* Clawd acts out the deck state (sprite chosen by the reducer's pose).
+     Pixel art stays chunky at any size; ambient-dim like everything else. */
+  #clawd {
+    width: 14vmin; height: 14vmin;
+    image-rendering: pixelated;
+    opacity: 0.85;
+  }
+  /* D17: the typing loop is the only continuous animation, and only while
+     running. steps() keeps the bob pixel-true — no sub-pixel smearing. */
+  body[data-mode='running'] #clawd { animation: clawd-bob 1.1s steps(2, end) infinite; }
+  @keyframes clawd-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(0.6vmin); }
+  }
+  /* Paused and offline out-rank running's accent — they must stop its motion
+     too, or a paused (or disconnected) running session would keep bobbing. */
+  body[data-paused='true'] #clawd { animation: none; }
+  body[data-mode='offline'] #clawd { animation: none; }
+  /* The takeover card borrows the same mascot at header scale. */
+  #approval-clawd { width: 8vmin; height: 8vmin; image-rendering: pixelated; }
 
   /* D11 + D17: the in-page done alert — one full-saturation green boundary
      flash, then back to stillness. Fires only for threshold-crossing turns. */
@@ -233,6 +256,8 @@
   </form>
 
   <section id="deck" class="hidden">
+    <!-- Clawd shows the state: sprite swapped per reducer pose, never text. -->
+    <img id="clawd" alt="">
     <div id="digits">--:--</div>
     <div id="session-title"></div>
     <div id="mode-label">IDLE</div>
@@ -248,6 +273,7 @@
 
 <section id="approval" class="hidden">
   <div id="approval-header">
+    <img id="approval-clawd" alt="">
     <div id="approval-tool"></div>
     <div id="queue-badge"></div>
   </div>
@@ -271,6 +297,8 @@
   import {
     allowHoldMs,
     ambientShift,
+    clawdPose,
+    clawdSprite,
     completionAlert,
     deckView,
     formatElapsed,
@@ -296,6 +324,8 @@
   const status = document.getElementById('status')
   const tickerEl = document.getElementById('ticker')
   const pauseToggle = document.getElementById('pause-toggle')
+  const clawd = document.getElementById('clawd')
+  const approvalClawd = document.getElementById('approval-clawd')
 
   const alertFlash = document.getElementById('alert-flash')
   const approval = document.getElementById('approval')
@@ -338,6 +368,11 @@
       sessionTitle.textContent = view.title
       modeLabel.textContent = view.mode === 'running' ? 'RUNNING' : '■ DONE'
     }
+    // Clawd's pose is the reducer's word too — fed the prompt queue so a
+    // waiting card alarms him. Only a changed pose touches src: the render
+    // tick must not restart the sprite request twice a second.
+    const sprite = clawdSprite(clawdPose(view, prompts.length > 0))
+    if (clawd.getAttribute('src') !== sprite) clawd.setAttribute('src', sprite)
     const shift = ambientShift(Math.floor(Date.now() / 60_000))
     main.style.transform = `translate(${shift.x}px, ${shift.y}px)`
     tickerEl.style.transform = `translate(${shift.x}px, ${shift.y}px)`
@@ -441,6 +476,8 @@
   // arrive paired with their permission-resolved event), so the buzz is
   // honest news either way.
   let shownPromptId = null
+  // The takeover exists to be answered — its Clawd is always the alarmed one.
+  approvalClawd.setAttribute('src', clawdSprite('alarmed'))
   function renderApproval() {
     const current = prompts[0]
     if (current === undefined) {

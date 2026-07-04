@@ -69,6 +69,33 @@ describe('PWA shell', () => {
     expect(await response.text()).toContain('export function reduceDeck')
   })
 
+  it('serves every brand asset from the swappable directory: starburst icon and one sprite per Clawd pose', async () => {
+    const { app } = buildApp()
+
+    const assets = [
+      'icon.svg',
+      'clawd-sleeping.svg',
+      'clawd-typing.svg',
+      'clawd-waving.svg',
+      'clawd-alarmed.svg',
+      'clawd-paused.svg',
+      'clawd-offline.svg',
+    ]
+    for (const asset of assets) {
+      const response = await app.request(`/brand/${asset}`)
+      expect(response.status, asset).toBe(200)
+      expect(response.headers.get('content-type'), asset).toContain('image/svg+xml')
+      expect(await response.text(), asset).toContain('<svg')
+    }
+  })
+
+  it('serves only whitelisted brand assets — unknown names and traversal both miss', async () => {
+    const { app } = buildApp()
+
+    expect((await app.request('/brand/nope.svg')).status).toBe(404)
+    expect((await app.request('/brand/..%2Findex.html')).status).toBe(404)
+  })
+
   it('serves a service worker that shows pushes only when no deck window is visible', async () => {
     const { app } = buildApp()
 
@@ -137,6 +164,39 @@ describe('PWA shell', () => {
     expect(html).toContain('ask: true')
     // Choice labels are untrusted input — textContent only.
     expect(html).not.toContain('innerHTML')
+  })
+
+  it('renders Clawd from the reducer pose: sprite element, pose fed by the view and the prompt queue', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The mascot is one img whose sprite derives from the shared reducer —
+    // pose logic lives with the state machine, not in DOM code.
+    expect(html).toContain('id="clawd"')
+    expect(html).toContain('clawdPose')
+    expect(html).toContain('clawdSprite')
+    // The pose sees the prompt queue: a waiting card alarms Clawd.
+    expect(html).toMatch(/clawdPose\([^)]*prompts/)
+    // Rebrand = asset swap: component code names no sprite file directly;
+    // every sprite path flows through the brand tokens.
+    expect(html).not.toContain('clawd-typing')
+    // The starburst icon comes from the same swappable directory.
+    expect(html).toContain('href="/brand/icon.svg"')
+  })
+
+  it('animates only the typing loop while running — every other pose holds still', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The bob is scoped to the running mode; no bare #clawd animation exists
+    // that could run in idle/done/paused/offline.
+    expect(html).toMatch(/body\[data-mode='running'\][^{]*#clawd\s*{[^}]*animation/)
+    expect(html).toContain('clawd-bob')
+    // Paused and offline override running's accent — they must stop its
+    // animation too, or a paused running session would keep bobbing.
+    expect(html).toMatch(/data-paused='true'[^{]*#clawd\s*{[^}]*animation:\s*none/)
   })
 
   it('recovers from a rejected token: a definitive 401/403 clears the saved token and re-shows the form', async () => {

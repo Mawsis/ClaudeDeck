@@ -10,7 +10,7 @@ import { createPauseState } from './pause-state.ts'
 import { registerPermissionRoutes } from './permission-routes.ts'
 import { registerQuestionRoutes } from './question-routes.ts'
 import { createPushRegistry, type PushSender, type PushSubscriptionJson } from './push-registry.ts'
-import { loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
+import { loadBrandAssets, loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
 import { clampDetail, extractToolDetail } from './tool-detail.ts'
 
 export type { PushSender, PushSubscriptionJson } from './push-registry.ts'
@@ -114,6 +114,7 @@ export function createApp(config: AppConfig) {
   const pwaHtml = loadPwaHtml()
   const deckReducerJs = loadDeckReducerJs()
   const serviceWorkerJs = loadServiceWorkerJs()
+  const brandAssets = loadBrandAssets()
   const app = new Hono()
 
   const alertThresholdMs = config.alerts?.thresholdMs ?? DEFAULT_ALERT_THRESHOLD_MS
@@ -140,6 +141,14 @@ export function createApp(config: AppConfig) {
   app.get('/deck-reducer.js', (c) =>
     c.body(deckReducerJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }),
   )
+
+  // Brand assets are a startup-loaded whitelist — a miss is a 404, and the
+  // request path never touches the filesystem.
+  app.get('/brand/:name', (c) => {
+    const asset = brandAssets.get(c.req.param('name'))
+    if (asset === undefined) return c.notFound()
+    return c.body(asset, 200, { 'Content-Type': 'image/svg+xml' })
+  })
 
   app.get('/sw.js', (c) =>
     c.body(serviceWorkerJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }),

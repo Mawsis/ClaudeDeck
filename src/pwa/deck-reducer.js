@@ -293,6 +293,50 @@ export function ambientShift(minuteIndex) {
   return AMBIENT_ORBIT[Math.abs(minuteIndex) % AMBIENT_ORBIT.length] ?? { x: 0, y: 0 }
 }
 
+/**
+ * @typedef {'sleeping' | 'typing' | 'waving' | 'alarmed' | 'paused' | 'offline'} ClawdPose
+ */
+
+/**
+ * Clawd acts out the deck state so it reads from peripheral vision.
+ *
+ * @param {DeckView} view
+ * @param {boolean} [promptPending] a takeover card is up
+ * @returns {ClawdPose}
+ */
+export function clawdPose(view, promptPending = false) {
+  // Same precedence as the accents: offline owns the pose outright (a card a
+  // dead stream can't answer must not beckon), then the waiting prompt, then
+  // the paused overlay, then whatever the session is doing.
+  if (view.mode === 'offline') return 'offline'
+  if (promptPending) return 'alarmed'
+  if (view.paused) return 'paused'
+  if (view.mode === 'running') return 'typing'
+  if (view.mode === 'done') return 'waving'
+  return 'sleeping'
+}
+
+// Every brand asset — starburst icon, Clawd sprites — resolves through this
+// one directory. A rebrand is an asset swap behind these tokens, never a
+// component-code change.
+const BRAND_DIR = '/brand'
+
+/**
+ * @param {string} name
+ * @returns {string} URL path of a brand asset
+ */
+export function brandAsset(name) {
+  return `${BRAND_DIR}/${name}`
+}
+
+/**
+ * @param {ClawdPose} pose
+ * @returns {string} URL path of the sprite acting out this pose
+ */
+export function clawdSprite(pose) {
+  return brandAsset(`clawd-${pose}.svg`)
+}
+
 /** @param {number} value */
 function pad(value) {
   return String(value).padStart(2, '0')
