@@ -309,6 +309,49 @@ describe('PWA shell', () => {
     expect(loops).toHaveLength(3)
   })
 
+  it('docks on one tap of the idle clock: fullscreen request, then landscape lock inside the same gesture', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The tap lands on the clock itself; both APIs fire from that one gesture
+    // because orientation lock is only permitted while fullscreen.
+    expect(html).toMatch(/digits\.addEventListener\('click'/)
+    expect(html).toContain('requestFullscreen')
+    expect(html).toMatch(/requestFullscreen\(\)[\s\S]*?orientation\.lock\('landscape'\)/)
+  })
+
+  it('keeps docking gesture-only and failure-safe: fullscreen fires nowhere but the tap, and denial degrades silently', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // No fullscreen request without a user gesture: the API appears exactly
+    // once, and only inside the clock's tap handler.
+    expect(html.match(/requestFullscreen/g)).toHaveLength(1)
+    expect(html).toMatch(
+      /digits\.addEventListener\('click'[\s\S]*?try\s*{[\s\S]*?requestFullscreen[\s\S]*?}\s*catch/,
+    )
+    // Failure of either API leaves the deck working — no error state exists.
+    expect(html).not.toContain('dock failed')
+  })
+
+  it('docks only from idle and stays a plain website: takeovers cannot trigger it, no manifest, no custom exit UI', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // A tap that lands while a takeover (or any non-idle mode) owns the screen
+    // must not dock — the handler checks the reducer-driven mode first.
+    expect(html).toMatch(
+      /digits\.addEventListener\('click'[\s\S]*?dataset\.mode !== 'idle'\) return/,
+    )
+    // Dock mode is not an install: no manifest, no home-screen prompt.
+    expect(html).not.toContain('rel="manifest"')
+    // Exit is the system back gesture — the page never exits fullscreen itself.
+    expect(html).not.toContain('exitFullscreen')
+  })
+
   it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {
     const { app } = buildApp()
 

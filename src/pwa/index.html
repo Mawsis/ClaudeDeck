@@ -827,6 +827,19 @@
   })
   holdWakeLock()
 
+  // Dock mode: one tap on the idle clock goes fullscreen and locks landscape.
+  // Orientation lock is only permitted while fullscreen, so both ride the same
+  // gesture. Exit is the system back gesture — no custom exit UI.
+  digits.addEventListener('click', async () => {
+    if (document.body.dataset.mode !== 'idle') return
+    try {
+      await document.documentElement.requestFullscreen()
+      await screen.orientation.lock('landscape')
+    } catch {
+      // Either API missing or denied — the deck keeps working un-docked.
+    }
+  })
+
   form.addEventListener('submit', (submitEvent) => {
     submitEvent.preventDefault()
     const token = input.value.trim()
