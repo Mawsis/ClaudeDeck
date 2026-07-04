@@ -43,6 +43,41 @@ describe('ticker reducer', () => {
     expect(ticker).toBe(initialTicker)
   })
 
+  it('renders a handshake as a highlighted install-verified row — the pipeline proof lands on the strip', () => {
+    const ticker = reduceTicker(initialTicker, {
+      type: 'handshake',
+      id: 1,
+      bootId: 'boot-a',
+      sessionId: 'install-1',
+      title: 'my-app',
+      at: 10_001,
+    })
+
+    expect(ticker).toEqual([
+      {
+        key: 'boot-a:1',
+        tool: 'slopdeck',
+        detail: 'install verified',
+        risk: 'highlighted',
+        at: 10_001,
+      },
+    ])
+  })
+
+  it('deduplicates a replayed handshake like any tool row — reconnects must not restack the proof', () => {
+    const handshake = {
+      type: 'handshake',
+      id: 1,
+      bootId: 'boot-a',
+      sessionId: 'install-1',
+      title: 'my-app',
+      at: 10_001,
+    }
+    const once = reduceTicker(initialTicker, handshake)
+
+    expect(reduceTicker(once, handshake)).toBe(once)
+  })
+
   it('drops the oldest row beyond capacity — the strip never grows unbounded', () => {
     let ticker = initialTicker
     for (let id = 1; id <= 30; id += 1) {

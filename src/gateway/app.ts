@@ -39,6 +39,9 @@ const MAX_TITLE_LENGTH = 120
 const HOOK_EVENT_TYPES = {
   Stop: 'stop',
   UserPromptSubmit: 'prompt',
+  // Not a real Claude Code hook: the CLI install fires this one itself as the
+  // proof-of-pipeline ping, through the same authenticated ingest path.
+  Handshake: 'handshake',
 } as const
 
 type HookPayload =
@@ -169,7 +172,7 @@ export function createApp(config: AppConfig) {
       return c.json(
         {
           error:
-            'expected a Stop, UserPromptSubmit, or PostToolUse hook payload with session_id and cwd',
+            'expected a Stop, UserPromptSubmit, PostToolUse, or Handshake hook payload with session_id and cwd',
         },
         400,
       )

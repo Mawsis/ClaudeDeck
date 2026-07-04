@@ -352,6 +352,8 @@
     initialDeckState,
     initialPrompts,
     initialTicker,
+    fragmentToken,
+    handshakeWave,
     localEventTime,
     pulseColon,
     queueBadge,
@@ -444,7 +446,7 @@
     // Clawd's pose is the reducer's word too — fed the prompt queue so a
     // waiting card alarms him. Only a changed pose touches src: the render
     // tick must not restart the sprite request twice a second.
-    const sprite = clawdSprite(clawdPose(view, prompts.length > 0))
+    const sprite = clawdSprite(clawdPose(view, prompts.length > 0, Date.now() < waveUntil))
     if (clawd.getAttribute('src') !== sprite) clawd.setAttribute('src', sprite)
     const shift = ambientShift(Math.floor(Date.now() / 60_000))
     main.style.transform = `translate(${shift.x}px, ${shift.y}px)`
@@ -511,6 +513,23 @@
     const event = JSON.parse(message.data)
     ticker = reduceTicker(ticker, { ...event, at: localEventTime(event, Date.now()) })
     renderTicker()
+  }
+
+  // The install's handshake is an ordinary event: same ticker reducer as tool
+  // rows, and the wave is the reducer's age-gated decision — the page only
+  // remembers the deadline, which the 500ms render tick compares against.
+  let waveUntil = 0
+  function onHandshakeEvent(message) {
+    const event = JSON.parse(message.data)
+    const receiptNow = Date.now()
+    const rebased = { ...event, at: localEventTime(event, receiptNow) }
+    ticker = reduceTicker(ticker, rebased)
+    renderTicker()
+    const until = handshakeWave(rebased, receiptNow)
+    if (until !== null) {
+      waveUntil = until
+      render()
+    }
   }
 
   // D5: interception mode flows through the same reducer as everything else —
@@ -805,6 +824,7 @@
     source.addEventListener('prompt', onDeckEvent)
     source.addEventListener('stop', onDeckEvent)
     source.addEventListener('tool', onToolEvent)
+    source.addEventListener('handshake', onHandshakeEvent)
     source.addEventListener('permission', onPromptLifecycleEvent)
     source.addEventListener('permission-resolved', onPromptLifecycleEvent)
     source.addEventListener('question', onPromptLifecycleEvent)
@@ -848,11 +868,23 @@
     connect(token)
   })
 
-  const saved = localStorage.getItem(TOKEN_KEY)
-  if (saved) {
-    connect(saved)
+  // Phone pairing via URL fragment: a #deck-token= fragment is taken exactly
+  // as if it had been pasted into the form — same storage slot, same connect
+  // path, same rejection recovery. Fragments never travel in HTTP requests,
+  // so the token cannot reach server or proxy logs; replaceState scrubs it
+  // from the address bar and the history entry before the deck renders.
+  const fromFragment = fragmentToken(location.hash)
+  if (fromFragment !== null) {
+    history.replaceState(null, '', location.pathname + location.search)
+    localStorage.setItem(TOKEN_KEY, fromFragment)
+    connect(fromFragment)
   } else {
-    form.classList.remove('hidden')
+    const saved = localStorage.getItem(TOKEN_KEY)
+    if (saved) {
+      connect(saved)
+    } else {
+      form.classList.remove('hidden')
+    }
   }
 </script>
 </body>

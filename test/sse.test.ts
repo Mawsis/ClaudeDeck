@@ -53,6 +53,27 @@ describe('SSE stream', () => {
     await reader.cancel()
   })
 
+  it('streams and replays a handshake like any other event — its own SSE name, same Last-Event-ID path', async () => {
+    const { app, eventLog } = buildApp()
+    eventLog.publish({ type: 'prompt', sessionId: 's1', title: 'seen', cwd: '/w/seen' })
+    eventLog.publish({ type: 'handshake', sessionId: 'install-1', title: 'my-app', cwd: '/w/my-app' })
+
+    const response = await app.request(`/api/stream?token=${DECK_TOKEN}`, {
+      headers: { 'Last-Event-ID': '1' },
+    })
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+
+    let frames = ''
+    while (!frames.includes('id: 2')) {
+      frames += decoder.decode((await reader.read()).value)
+    }
+    expect(frames).not.toContain('"title":"seen"')
+    expect(frames).toContain('event: handshake')
+    expect(frames).toContain('"title":"my-app"')
+    await reader.cancel()
+  })
+
   it.each(['garbage', '', '1.5', '-3'])(
     'ignores a malformed Last-Event-ID (%j) and streams only live events',
     async (lastEventId) => {

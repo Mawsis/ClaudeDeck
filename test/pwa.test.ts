@@ -1,5 +1,68 @@
 import { describe, expect, it } from 'vitest'
+import { fragmentToken } from '../src/pwa/deck-reducer.js'
 import { buildApp } from './helpers.ts'
+
+describe('fragment pairing', () => {
+  it('extracts the deck token from a #deck-token fragment', () => {
+    expect(fragmentToken('#deck-token=abc123')).toBe('abc123')
+  })
+
+  it('ignores anything that is not a deck-token pairing fragment', () => {
+    expect(fragmentToken('')).toBeNull()
+    expect(fragmentToken('#')).toBeNull()
+    expect(fragmentToken('#section-2')).toBeNull()
+    expect(fragmentToken('#other-key=abc123')).toBeNull()
+    expect(fragmentToken('#deck-token=')).toBeNull()
+  })
+
+  it('decodes percent-encoded tokens so the fragment round-trips any token the CLI encodes', () => {
+    expect(fragmentToken('#deck-token=abc%2Bdef%3D%3D')).toBe('abc+def==')
+  })
+
+  it('pairs from the URL fragment: token parsed by the shared helper, stored exactly as if pasted, then connected', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // Parsing is the reducer's job — the page hands over location.hash raw.
+    expect(html).toContain('fragmentToken')
+    expect(html).toContain('location.hash')
+    // The token lands in the same storage slot the paste form uses, so every
+    // downstream path (rejection probe, reconnect on reload) is shared.
+    expect(html).toMatch(/localStorage\.setItem\(TOKEN_KEY,\s*fromFragment\)/)
+  })
+
+  it('strips the fragment from the address bar and history before the deck renders', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // replaceState rewrites the entry in place — the token never survives in
+    // the visible URL, and Back cannot resurrect it.
+    expect(html).toContain('history.replaceState')
+    // The strip happens before connect() ever runs (connect is what renders).
+    expect(html).toMatch(/history\.replaceState[\s\S]*?connect\(fromFragment\)/)
+  })
+
+  it('changes nothing else: fragment gates the intake, plain visits keep the saved-token/paste flow, rejection stays shared', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // No fragment → the exact pre-existing startup: saved token connects,
+    // otherwise the paste form shows.
+    expect(html).toMatch(
+      /fromFragment !== null[\s\S]*?localStorage\.getItem\(TOKEN_KEY\)[\s\S]*?connect\(saved\)[\s\S]*?form\.classList\.remove\('hidden'\)/,
+    )
+    // An invalid fragment token has no error path of its own — connect()'s
+    // 401/403 probe clears it and re-shows the paste form, same as a bad
+    // pasted token. Exactly three connect call sites: fragment, saved, form.
+    expect(html.match(/\bconnect\(/g)).toHaveLength(4) // 3 calls + 1 definition
+    expect(html).toContain('connect(fromFragment)')
+    expect(html).toContain('connect(saved)')
+    expect(html).toContain('connect(token)')
+  })
+})
 
 describe('PWA shell', () => {
   it('serves the deck page at the root without auth', async () => {
@@ -350,6 +413,21 @@ describe('PWA shell', () => {
     expect(html).not.toContain('rel="manifest"')
     // Exit is the system back gesture — the page never exits fullscreen itself.
     expect(html).not.toContain('exitFullscreen')
+  })
+
+  it('reacts to a handshake as an ordinary event: SSE listener into the shared ticker path, wave decided by the reducer', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The handshake rides the same listener-and-reducer path as tool rows —
+    // no dedicated UI state anywhere on the page.
+    expect(html).toContain("addEventListener('handshake'")
+    // The wave is the reducer's decision (age-gated against replay), held
+    // only as a deadline the 500ms render tick compares against.
+    expect(html).toContain('handshakeWave')
+    expect(html).toContain('waveUntil')
+    expect(html).toMatch(/clawdPose\(view,.*waveUntil/)
   })
 
   it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {

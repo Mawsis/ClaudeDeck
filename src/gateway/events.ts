@@ -9,11 +9,21 @@ export type DeckEventType =
   | 'question'
   | 'question-resolved'
   | 'mode'
+  | 'handshake'
 
 export type TickerCategory = BashCategory | 'edit'
 
 export type LifecycleEventInput = {
   readonly type: 'prompt' | 'stop'
+  readonly sessionId: string
+  readonly title: string
+  readonly cwd: string
+}
+
+/** The install's "look at your phone" ping — an ordinary event end to end:
+ * same ingest auth, same log, same SSE replay. No dedicated UI state. */
+export type HandshakeEventInput = {
+  readonly type: 'handshake'
   readonly sessionId: string
   readonly title: string
   readonly cwd: string
@@ -103,6 +113,7 @@ export type ModeEventInput = {
 
 export type DeckEventInput =
   | LifecycleEventInput
+  | HandshakeEventInput
   | ToolEventInput
   | PermissionEventInput
   | PermissionResolvedEventInput

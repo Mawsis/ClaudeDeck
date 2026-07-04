@@ -91,6 +91,34 @@ describe('event ingest', () => {
     expect(events[0]).toMatchObject({ type: 'prompt', sessionId: 'sess-42', title: 'my-app' })
   })
 
+  it('accepts a Handshake payload and publishes it as a handshake event — the proof-of-pipeline ping', async () => {
+    const { app, eventLog } = buildApp()
+
+    const response = await postEvent(app, HOOK_TOKEN, {
+      hook_event_name: 'Handshake',
+      session_id: 'install-1',
+      cwd: '/Users/mac/Workshop/Personal/my-app',
+    })
+
+    expect(response.status).toBe(202)
+    const events = eventLog.history()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ type: 'handshake', sessionId: 'install-1', title: 'my-app' })
+  })
+
+  it('rejects an unauthenticated Handshake exactly like every other hook post', async () => {
+    const { app, eventLog } = buildApp()
+
+    const handshake = {
+      hook_event_name: 'Handshake',
+      session_id: 'install-1',
+      cwd: '/tmp/app',
+    }
+    expect((await postEvent(app, undefined, handshake)).status).toBe(401)
+    expect((await postEvent(app, DECK_TOKEN, handshake)).status).toBe(403)
+    expect(eventLog.history()).toHaveLength(0)
+  })
+
   it('rejects hook event names outside the supported set with 400', async () => {
     const { app, eventLog } = buildApp()
 

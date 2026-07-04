@@ -1,5 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import { brandAsset, clawdPose, clawdSprite } from '../src/pwa/deck-reducer.js'
+import {
+  brandAsset,
+  clawdPose,
+  clawdSprite,
+  HANDSHAKE_WAVE_MS,
+  handshakeWave,
+} from '../src/pwa/deck-reducer.js'
+
+describe('handshake wave', () => {
+  it('grants a bounded wave for a live handshake — the "look at your phone" moment', () => {
+    const receiptNow = 100_000
+
+    const until = handshakeWave({ type: 'handshake', at: 100_000 }, receiptNow)
+
+    expect(until).toBe(receiptNow + HANDSHAKE_WAVE_MS)
+  })
+
+  it('ignores replayed history and other events — a reconnecting deck must not re-wave old proofs', () => {
+    const receiptNow = 100_000
+
+    // A frame whose rebased age says it happened long before receipt is
+    // ring-buffer replay, not news.
+    expect(handshakeWave({ type: 'handshake', at: 10_000 }, receiptNow)).toBeNull()
+    expect(handshakeWave({ type: 'stop', at: 100_000 }, receiptNow)).toBeNull()
+  })
+})
 
 describe('clawd pose', () => {
   it('acts out the session modes: sleeping when idle, typing while running, waving on done', () => {
@@ -31,6 +56,19 @@ describe('clawd pose', () => {
 
   it('never shows alarmed on a dead stream — a card the deck cannot answer must not beckon', () => {
     expect(clawdPose({ mode: 'offline' }, true)).toBe('offline')
+  })
+
+  it('waves back at a fresh handshake from any live state — that is the whole point of the ping', () => {
+    expect(clawdPose({ mode: 'idle' }, false, true)).toBe('waving')
+    expect(clawdPose({ mode: 'running', title: 'my-app', elapsedMs: 1_000 }, false, true)).toBe(
+      'waving',
+    )
+    expect(clawdPose({ mode: 'idle', paused: true }, false, true)).toBe('waving')
+  })
+
+  it('never lets the wave mask offline or a waiting card — urgency outranks celebration', () => {
+    expect(clawdPose({ mode: 'offline' }, false, true)).toBe('offline')
+    expect(clawdPose({ mode: 'idle' }, true, true)).toBe('alarmed')
   })
 
   it('gives every deck state a distinct pose — no two ambiguous at a glance', () => {

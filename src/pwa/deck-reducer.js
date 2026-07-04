@@ -162,24 +162,29 @@ const TICKER_CAPACITY = 20
  * @returns {readonly TickerRow[]}
  */
 export function reduceTicker(ticker, event) {
-  if (event.type !== 'tool') return ticker
+  if (event.type !== 'tool' && event.type !== 'handshake') return ticker
   // Reconnect replay is at-least-once; the audit strip must stay exactly-once.
   // Keyed by (bootId, id): a restarted gateway reuses ids from 1, and those
   // collisions are new events, not duplicates.
   const key = `${event.bootId ?? ''}:${event.id}`
   if (ticker.some((row) => row.key === key)) return ticker
-  const row = {
-    key,
-    tool: String(event.tool ?? ''),
-    detail: String(event.detail ?? ''),
-    // The strip renders two tiers; `high` (D15's long-hold tier) is above
-    // `highlighted`, so it must never fall through to a dim routine row.
-    risk:
-      event.risk === 'highlighted' || event.risk === 'high'
-        ? /** @type {const} */ ('highlighted')
-        : /** @type {const} */ ('routine'),
-    at: event.at,
-  }
+  const row =
+    event.type === 'handshake'
+      ? // The install's proof-of-pipeline ping — an ordinary highlighted row,
+        // no dedicated UI state.
+        { key, tool: 'slopdeck', detail: 'install verified', risk: /** @type {const} */ ('highlighted'), at: event.at }
+      : {
+          key,
+          tool: String(event.tool ?? ''),
+          detail: String(event.detail ?? ''),
+          // The strip renders two tiers; `high` (D15's long-hold tier) is above
+          // `highlighted`, so it must never fall through to a dim routine row.
+          risk:
+            event.risk === 'highlighted' || event.risk === 'high'
+              ? /** @type {const} */ ('highlighted')
+              : /** @type {const} */ ('routine'),
+          at: event.at,
+        }
   return [row, ...ticker].slice(0, TICKER_CAPACITY)
 }
 
@@ -369,6 +374,26 @@ export function ambientShift(minuteIndex) {
   return AMBIENT_ORBIT[Math.abs(minuteIndex) % AMBIENT_ORBIT.length] ?? { x: 0, y: 0 }
 }
 
+/** How long Clawd waves back at a fresh handshake before resuming his day. */
+export const HANDSHAKE_WAVE_MS = 4_000
+
+/**
+ * The install's proof-of-pipeline ping earns a bounded wave — but only when it
+ * is news. Reconnect replay redelivers history (at-least-once), and an old
+ * handshake waving again would be a lie, so age gates it exactly like
+ * completionAlert's MAX_ALERT_AGE_MS.
+ *
+ * @param {{ type: string, at: number }} event with `at` already rebased onto
+ *   this device's clock (localEventTime)
+ * @param {number} receiptNow this device's clock at receipt
+ * @returns {number | null} wave-until timestamp, or null when nothing waves
+ */
+export function handshakeWave(event, receiptNow) {
+  if (event.type !== 'handshake') return null
+  if (receiptNow - event.at > MAX_ALERT_AGE_MS) return null
+  return receiptNow + HANDSHAKE_WAVE_MS
+}
+
 /**
  * @typedef {'sleeping' | 'typing' | 'waving' | 'alarmed' | 'paused' | 'offline'} ClawdPose
  */
@@ -378,14 +403,18 @@ export function ambientShift(minuteIndex) {
  *
  * @param {DeckView} view
  * @param {boolean} [promptPending] a takeover card is up
+ * @param {boolean} [waving] a fresh handshake's bounded wave (handshakeWave)
  * @returns {ClawdPose}
  */
-export function clawdPose(view, promptPending = false) {
+export function clawdPose(view, promptPending = false, waving = false) {
   // Same precedence as the accents: offline owns the pose outright (a card a
   // dead stream can't answer must not beckon), then the waiting prompt, then
-  // the paused overlay, then whatever the session is doing.
+  // the handshake wave (short-lived and made to be seen — it outranks the
+  // paused readout but never urgency), then the paused overlay, then whatever
+  // the session is doing.
   if (view.mode === 'offline') return 'offline'
   if (promptPending) return 'alarmed'
+  if (waving) return 'waving'
   if (view.paused) return 'paused'
   if (view.mode === 'running') return 'typing'
   if (view.mode === 'done') return 'waving'
@@ -487,4 +516,22 @@ export function formatTimeOfDay(date) {
  */
 export function pulseColon(text, now) {
   return Math.floor(now / 500) % 2 === 0 ? text : text.replace(':', ' ')
+}
+
+/**
+ * Phone pairing via URL fragment: `#deck-token=<token>`. Fragments never
+ * travel in HTTP requests, so the token cannot reach server or proxy logs.
+ *
+ * @param {string} hash `location.hash` as the browser reports it
+ * @returns {string | null} the token, or null when the fragment is not a pairing fragment
+ */
+export function fragmentToken(hash) {
+  if (!hash.startsWith('#deck-token=')) return null
+  try {
+    const token = decodeURIComponent(hash.slice('#deck-token='.length))
+    return token === '' ? null : token
+  } catch {
+    // Malformed percent-encoding — not a pairing fragment we can honor.
+    return null
+  }
 }
