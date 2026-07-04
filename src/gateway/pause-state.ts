@@ -9,6 +9,8 @@ export type PauseState = {
   isPaused(): boolean
   /** Flip the mode; returns the resulting paused state for the deck to render. */
   toggle(): boolean
+  /** Set the mode explicitly — idempotent, for the CLI's on/off remote. */
+  set(paused: boolean): boolean
 }
 
 export function createPauseState(): PauseState {
@@ -18,6 +20,10 @@ export function createPauseState(): PauseState {
     isPaused: () => paused,
     toggle() {
       paused = !paused
+      return paused
+    },
+    set(next) {
+      paused = next
       return paused
     },
   }

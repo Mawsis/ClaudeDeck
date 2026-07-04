@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Ambient phone-as-deck companion + remote permission control for Claude Code",
+  "bin": {
+    "slopdeck": "./bin/slopdeck.js"
+  },
   "scripts": {
     "dev": "node --watch --experimental-strip-types src/gateway/index.ts",
     "start": "node --experimental-strip-types src/gateway/index.ts",

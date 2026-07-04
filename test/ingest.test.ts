@@ -229,3 +229,69 @@ describe('event ingest', () => {
     }
   })
 })
+
+describe('hook token verification endpoint', () => {
+  it('answers ok to the hook token — the CLI verifies a pasted token before writing any file', async () => {
+    const { app } = buildApp()
+
+    const response = await app.request('/api/hook-check', {
+      headers: { Authorization: `Bearer ${HOOK_TOKEN}` },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ ok: true })
+  })
+
+  it('rejects a wrong token with 401 and the deck token with 403 — right credential, wrong door', async () => {
+    const { app } = buildApp()
+
+    const wrong = await app.request('/api/hook-check', {
+      headers: { Authorization: 'Bearer nope' },
+    })
+    const deckScoped = await app.request('/api/hook-check', {
+      headers: { Authorization: `Bearer ${DECK_TOKEN}` },
+    })
+
+    expect(wrong.status).toBe(401)
+    expect(deckScoped.status).toBe(403)
+  })
+})
+
+describe('explicit pause set', () => {
+  it('sets the mode from an explicit body instead of toggling — idempotent for the CLI remote', async () => {
+    const { app } = buildApp()
+
+    const paused = await app.request('/api/pause', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DECK_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused: true }),
+    })
+    expect(await paused.json()).toEqual({ paused: true })
+
+    // Same explicit set again: still paused — a set, not a flip.
+    const again = await app.request('/api/pause', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DECK_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused: true }),
+    })
+    expect(await again.json()).toEqual({ paused: true })
+  })
+
+  it('keeps the bare-body tap a toggle — the deck button is unchanged', async () => {
+    const { app } = buildApp()
+
+    const first = await app.request('/api/pause', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DECK_TOKEN}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    const second = await app.request('/api/pause', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DECK_TOKEN}`, 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+
+    expect(await first.json()).toEqual({ paused: true })
+    expect(await second.json()).toEqual({ paused: false })
+  })
+})

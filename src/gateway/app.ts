@@ -260,10 +260,23 @@ export function createApp(config: AppConfig) {
     timeoutMs: config.questionTimeoutMs,
   })
 
+  // The CLI's install flow verifies a pasted hook token live, before writing
+  // any file — an authenticated no-op behind the same scope gate as ingest.
+  app.get('/api/hook-check', requireScope('hook', tokens), (c) => c.json({ ok: true }, 200))
+
   // A tap toggles interception and broadcasts the new mode through the log, so
-  // it streams live and replays to any deck that reconnects (D5/D14).
-  app.post('/api/pause', requireScope('deck', tokens), (c) => {
-    const paused = pauseState.toggle()
+  // it streams live and replays to any deck that reconnects (D5/D14). An
+  // explicit `{ paused }` body sets instead of flipping — idempotent, for the
+  // CLI's on/off remote; the deck's bare-body tap keeps its toggle.
+  app.post('/api/pause', requireScope('deck', tokens), async (c) => {
+    let requested: unknown
+    try {
+      requested = ((await c.req.json()) as Record<string, unknown>).paused
+    } catch {
+      requested = undefined
+    }
+    const paused =
+      typeof requested === 'boolean' ? pauseState.set(requested) : pauseState.toggle()
     eventLog.publish({ type: 'mode', paused })
     return c.json({ paused }, 200)
   })
