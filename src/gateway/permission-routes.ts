@@ -1,10 +1,12 @@
 import { basename } from 'node:path'
 import type { Hono } from 'hono'
 import { requireScope, type AuthTokens } from './auth.ts'
+import { classifyBash } from './bash-classifier.ts'
 import type { EventLog } from './event-log.ts'
+import type { PermissionRisk } from './events.ts'
 import { createPendingPromptStore } from './pending-prompts.ts'
 import type { PushRegistry } from './push-registry.ts'
-import { clampDetail, permissionDetail } from './tool-detail.ts'
+import { clampDetail, extractToolDetail, permissionDetail } from './tool-detail.ts'
 
 const MAX_TITLE_LENGTH = 120
 
@@ -86,7 +88,16 @@ export function registerPermissionRoutes(app: Hono, config: PermissionRoutesConf
       promptId: held.id,
     }
     const detail = permissionDetail(payload.tool_input, payload.cwd)
-    eventLog.publish({ type: 'permission', ...base, tool: payload.tool_name, detail })
+    // D15: risk comes from the raw command, never the display-truncated
+    // detail — a truncated tail must not hide the destructive part. Scoped
+    // to Bash by design: D15's high-risk table is the Bash classifier, and
+    // every other tool's card keeps the standard hold.
+    const risk: PermissionRisk =
+      payload.tool_name === 'Bash' &&
+      classifyBash(extractToolDetail(payload.tool_input, payload.cwd)).risk === 'high'
+        ? 'high'
+        : 'routine'
+    eventLog.publish({ type: 'permission', ...base, tool: payload.tool_name, detail, risk })
 
     // D11: pending prompts always alert — they block a session. A prompt the
     // no-deck fallback already answered was never pending; alerting for a

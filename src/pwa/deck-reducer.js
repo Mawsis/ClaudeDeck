@@ -153,14 +153,20 @@ export function reduceTicker(ticker, event) {
     key,
     tool: String(event.tool ?? ''),
     detail: String(event.detail ?? ''),
-    risk: event.risk === 'highlighted' ? /** @type {const} */ ('highlighted') : /** @type {const} */ ('routine'),
+    // The strip renders two tiers; `high` (D15's long-hold tier) is above
+    // `highlighted`, so it must never fall through to a dim routine row.
+    risk:
+      event.risk === 'highlighted' || event.risk === 'high'
+        ? /** @type {const} */ ('highlighted')
+        : /** @type {const} */ ('routine'),
     at: event.at,
   }
   return [row, ...ticker].slice(0, TICKER_CAPACITY)
 }
 
 /**
- * @typedef {{ promptId: string, title: string, tool: string, detail: string }} PendingPrompt
+ * @typedef {{ promptId: string, title: string, tool: string, detail: string,
+ *   risk: 'high' | 'routine' }} PendingPrompt
  */
 
 /** @type {readonly PendingPrompt[]} */
@@ -171,7 +177,7 @@ export const initialPrompts = Object.freeze([])
  *
  * @param {readonly PendingPrompt[]} prompts
  * @param {{ type: string, promptId?: string, title?: string, tool?: string, detail?: string,
- *   outcome?: string }} event a deck SSE frame — external JSON, so fields are
+ *   risk?: string, outcome?: string }} event a deck SSE frame — external JSON, so fields are
  *   normalized, not trusted.
  * @returns {readonly PendingPrompt[]}
  */
@@ -191,8 +197,25 @@ export function reducePrompts(prompts, event) {
       title: String(event.title ?? ''),
       tool: String(event.tool ?? ''),
       detail: String(event.detail ?? ''),
+      // Only the exact D15 marker stretches the hold; anything else — absent,
+      // junk, or a future tier — gets the standard one, which still gates.
+      risk: event.risk === 'high' ? /** @type {const} */ ('high') : /** @type {const} */ ('routine'),
     },
   ]
+}
+
+/** D15: long enough to stop a brush, short enough not to punish every allow. */
+export const ALLOW_HOLD_MS = 500
+
+/** D15: a destructive command must take a hold no accident can complete. */
+export const HIGH_RISK_ALLOW_HOLD_MS = 1500
+
+/**
+ * @param {'high' | 'routine'} risk
+ * @returns {number} how long the Allow button must be held to fill
+ */
+export function allowHoldMs(risk) {
+  return risk === 'high' ? HIGH_RISK_ALLOW_HOLD_MS : ALLOW_HOLD_MS
 }
 
 // Slow orbit around center; every OLED pixel under the layout gets rest.

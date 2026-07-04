@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialPrompts, reducePrompts } from '../src/pwa/deck-reducer.js'
+import { allowHoldMs, initialPrompts, reducePrompts } from '../src/pwa/deck-reducer.js'
 
 const permissionEvent = (promptId: string, overrides: Record<string, unknown> = {}) => ({
   type: 'permission',
@@ -19,8 +19,22 @@ describe('prompts reducer', () => {
 
     expect(initialPrompts).toEqual([])
     expect(prompts).toEqual([
-      { promptId: 'p-1', title: 'my-app', tool: 'Bash', detail: 'rm -rf build' },
+      { promptId: 'p-1', title: 'my-app', tool: 'Bash', detail: 'rm -rf build', risk: 'routine' },
     ])
+  })
+
+  it('carries D15 risk onto the card — the Allow hold scales with it', () => {
+    const prompts = reducePrompts(initialPrompts, permissionEvent('p-1', { risk: 'high' }))
+
+    expect(prompts[0]).toMatchObject({ promptId: 'p-1', risk: 'high' })
+  })
+
+  it('normalizes an absent or unknown risk to routine — external JSON never picks the hold length', () => {
+    const absent = reducePrompts(initialPrompts, permissionEvent('p-1'))
+    const junk = reducePrompts(initialPrompts, permissionEvent('p-2', { risk: 'extreme' }))
+
+    expect(absent[0]!.risk).toBe('routine')
+    expect(junk[0]!.risk).toBe('routine')
   })
 
   it('drops the settled card on permission-resolved, keeping the rest of the queue', () => {
@@ -53,6 +67,14 @@ describe('prompts reducer', () => {
     })
 
     expect(after).toEqual(prompts)
+  })
+
+  // D15: ~500ms is enough to stop a brush; a high-risk command needs a hold
+  // long enough that completing it can only be deliberate.
+  it('scales the Allow hold with risk — visibly longer for high-risk commands', () => {
+    expect(allowHoldMs('routine')).toBe(500)
+    expect(allowHoldMs('high')).toBe(1500)
+    expect(allowHoldMs('high')).toBeGreaterThanOrEqual(2 * allowHoldMs('routine'))
   })
 
   it('queues FIFO — the deck answers prompts in arrival order', () => {

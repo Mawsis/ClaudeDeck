@@ -54,6 +54,15 @@ describe('ticker reducer', () => {
     expect(ticker.at(-1)!.key).toBe(`boot-a:${30 - ticker.length + 1}`)
   })
 
+  it('renders a high-risk action as a highlighted row — the third risk tier must not dim the audit strip', () => {
+    const ticker = reduceTicker(
+      initialTicker,
+      toolEvent(1, { category: 'migration', risk: 'high', detail: 'npm run migrate' }),
+    )
+
+    expect(ticker[0]).toMatchObject({ detail: 'npm run migrate', risk: 'highlighted' })
+  })
+
   it('ignores a redelivered event — reconnect replay must not duplicate audit rows', () => {
     const once = reduceTicker(initialTicker, toolEvent(7))
     const twice = reduceTicker(once, toolEvent(7))

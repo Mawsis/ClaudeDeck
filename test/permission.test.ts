@@ -238,6 +238,33 @@ describe('permission hold contract', () => {
     await deck.close()
   })
 
+  it('stamps D15 risk onto the card frame — only classifier-high commands demand the long hold', async () => {
+    const { app } = buildApp({ permissionTimeoutMs: 30 })
+    const deck = await openDeck(app)
+
+    await postPermission(app) // rm -rf build — destructive delete
+    await postPermission(app, permissionPayload({ tool_input: { command: 'ls -la' } }))
+    // Ticker-highlighted is not approval-high: an install keeps the standard hold.
+    await postPermission(app, permissionPayload({ tool_input: { command: 'npm install hono' } }))
+    await postPermission(
+      app,
+      permissionPayload({ tool_name: 'Write', tool_input: { file_path: '/w/my-app/README.md' } }),
+    )
+
+    const frames = await deck.readUntil('README.md')
+    const cards = frames
+      .split('\n\n')
+      .filter((block) => /^event: permission$/m.test(block))
+      .map((block) => JSON.parse(/^data: (.*)$/m.exec(block)![1]!) as { tool: string; risk: string })
+    expect(cards.map((card) => [card.tool, card.risk])).toEqual([
+      ['Bash', 'high'],
+      ['Bash', 'routine'],
+      ['Bash', 'routine'],
+      ['Write', 'routine'],
+    ])
+    await deck.close()
+  })
+
   it('publishes permission-resolved after a tap — a replaying deck never renders a settled card', async () => {
     const { app } = buildApp()
     const deck = await openDeck(app)

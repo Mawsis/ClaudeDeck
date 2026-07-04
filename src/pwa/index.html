@@ -148,11 +148,26 @@
     white-space: pre-wrap; word-break: break-all;
     border: 2px solid var(--dim); padding: 2vmin;
   }
-  /* D16: side-by-side actions. D15's hold-to-fill Allow lands with #8 —
-     until then Allow is styled hot so a stray tap at least aims eyes at it. */
+  /* D16: side-by-side actions. D15: Deny and Ask are single taps; Allow only
+     fires after a completed hold, so accidental contact with a desk-exposed
+     screen can only produce safe outcomes. */
   #approval-actions { display: flex; gap: 2vmin; }
   #approval-actions button { flex: 1; font-size: 2.2vmin; padding: 2.5vmin 1vmin; }
-  #approve-allow { background: var(--prompt); border-color: var(--prompt); color: var(--bg); }
+  #approve-allow {
+    background: var(--bg); color: var(--prompt); border-color: var(--prompt);
+    display: flex; flex-direction: column; align-items: stretch; gap: 1.5vmin;
+    /* The button is a gesture surface: no scroll capture, no long-press
+       text selection — the pointer belongs to the charge. */
+    touch-action: none; -webkit-user-select: none; user-select: none;
+  }
+  #allow-track { display: block; border: 2px solid var(--prompt); padding: 2px; height: 2.4vmin; }
+  #allow-fill { display: block; height: 100%; width: 0; background: var(--prompt); }
+  /* The pixel-art charge: steps() fills the bar in chunky segments over the
+     risk-scaled hold; dropping the class snaps it back empty instantly. */
+  #approve-allow.charging #allow-fill {
+    width: 100%;
+    transition: width var(--hold-ms, 500ms) steps(12, end);
+  }
   #approve-deny, #approve-ask {
     background: var(--bg); color: var(--dim); border-color: var(--dim);
   }
@@ -194,12 +209,16 @@
   <div id="approval-actions">
     <button id="approve-deny" type="button">DENY</button>
     <button id="approve-ask" type="button">ASK IN TERMINAL</button>
-    <button id="approve-allow" type="button">ALLOW</button>
+    <button id="approve-allow" type="button">
+      <span>HOLD TO ALLOW</span>
+      <span id="allow-track"><span id="allow-fill"></span></span>
+    </button>
   </div>
 </section>
 
 <script type="module">
   import {
+    allowHoldMs,
     ambientShift,
     completionAlert,
     deckView,
@@ -336,6 +355,7 @@
     if (current === undefined) {
       approval.classList.add('hidden')
       shownPromptId = null
+      cancelAllowHold()
       return
     }
     approval.classList.remove('hidden')
@@ -345,6 +365,9 @@
     approvalPayload.textContent = current.detail
     if (current.promptId !== shownPromptId) {
       shownPromptId = current.promptId
+      // A hold begun on the previous card must not keep charging over this
+      // one — the finger is now resting on a different question.
+      cancelAllowHold()
       // D11: prompt arrival always alerts — this is the in-page channel; the
       // service worker covers the backgrounded one.
       if ('vibrate' in navigator) navigator.vibrate([200, 80, 200])
@@ -382,7 +405,51 @@
     renderApproval()
   }
 
-  document.getElementById('approve-allow').addEventListener('click', () => resolveCurrentPrompt('allow'))
+  // D15: Allow is hold-to-fill — pointerdown starts the risk-scaled charge
+  // and only the completed hold sends the decision; a tap or brush charges
+  // for an instant and does nothing.
+  const allowButton = document.getElementById('approve-allow')
+  let allowHoldTimer = null
+  let allowHoldPointerId = null
+  function cancelAllowHold() {
+    if (allowHoldTimer === null) return
+    clearTimeout(allowHoldTimer)
+    allowHoldTimer = null
+    allowHoldPointerId = null
+    allowButton.classList.remove('charging')
+  }
+  allowButton.addEventListener('pointerdown', (pointer) => {
+    const current = prompts[0]
+    if (current === undefined || resolving || allowHoldTimer !== null) return
+    pointer.preventDefault()
+    // Touch pointers get implicit capture, which would keep the charge alive
+    // after the finger slides off the button — release it so pointerleave
+    // cancels the hold the same way it does for a mouse.
+    if (allowButton.hasPointerCapture?.(pointer.pointerId)) {
+      allowButton.releasePointerCapture(pointer.pointerId)
+    }
+    const holdMs = allowHoldMs(current.risk)
+    allowButton.style.setProperty('--hold-ms', holdMs + 'ms')
+    allowButton.classList.add('charging')
+    allowHoldPointerId = pointer.pointerId
+    allowHoldTimer = setTimeout(() => {
+      cancelAllowHold()
+      // The card may have settled elsewhere mid-hold; a completed hold must
+      // never answer a card it wasn't started on.
+      if (prompts[0]?.promptId === current.promptId) resolveCurrentPrompt('allow')
+    }, holdMs)
+  })
+  // Releasing early, sliding off, or losing the pointer resets the bar —
+  // but only the finger that started the charge may interrupt it: a stray
+  // second touch canceling a deliberate hold would be its own accident.
+  for (const interruption of ['pointerup', 'pointercancel', 'pointerleave']) {
+    allowButton.addEventListener(interruption, (pointer) => {
+      if (pointer.pointerId === allowHoldPointerId) cancelAllowHold()
+    })
+  }
+  // A long press must charge the bar, not summon a context menu.
+  allowButton.addEventListener('contextmenu', (menu) => menu.preventDefault())
+
   document.getElementById('approve-deny').addEventListener('click', () => resolveCurrentPrompt('deny'))
   document.getElementById('approve-ask').addEventListener('click', () => resolveCurrentPrompt('ask'))
 

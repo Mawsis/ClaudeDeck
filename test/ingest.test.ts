@@ -174,7 +174,7 @@ describe('event ingest', () => {
 
     expect(response.status).toBe(202)
     const event = eventLog.history()[0]!
-    expect(event).toMatchObject({ type: 'tool', category: 'git-push', risk: 'highlighted' })
+    expect(event).toMatchObject({ type: 'tool', category: 'force-push', risk: 'high' })
     if (event.type === 'tool') expect(event.detail.length).toBeLessThanOrEqual(200)
   })
 

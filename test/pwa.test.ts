@@ -84,7 +84,7 @@ describe('PWA shell', () => {
     expect(sw).toContain("addEventListener('notificationclick'")
   })
 
-  it('renders the approval card as a takeover: prompt events reduce, payload in a real monospace, three tap actions', async () => {
+  it('renders the approval card as a takeover: prompt events reduce, payload in a real monospace, three actions', async () => {
     const { app } = buildApp()
 
     const html = await (await app.request('/')).text()
@@ -97,7 +97,7 @@ describe('PWA shell', () => {
     // monospace, never the Press Start 2P / VT323 display fonts.
     expect(html).toContain('JetBrains Mono')
     expect(html).toMatch(/#approval-payload\s*{[^}]*JetBrains Mono/)
-    // Three tap actions resolving over plain HTTP (D8).
+    // Three actions resolving over plain HTTP (D8).
     expect(html).toContain('id="approve-allow"')
     expect(html).toContain('id="approve-deny"')
     expect(html).toContain('id="approve-ask"')
@@ -106,6 +106,28 @@ describe('PWA shell', () => {
     expect(html).not.toContain('innerHTML')
     // D11: prompt arrival always alerts — the takeover comes with a buzz.
     expect(html).toContain('id="approval"')
+  })
+
+  it('accident-proofs Allow (D15): risk-scaled hold-to-fill, cancel on release, Deny and Ask stay single taps', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The hold begins on pointerdown, scaled by the card's risk through the
+    // shared reducer's duration table.
+    expect(html).toContain('allowHoldMs')
+    expect(html).toContain('pointerdown')
+    // Releasing early, sliding off, or losing the pointer resets the bar.
+    expect(html).toContain('pointerup')
+    expect(html).toContain('pointercancel')
+    expect(html).toContain('pointerleave')
+    // The pixel-art charge bar is its own element the CSS fills.
+    expect(html).toContain('id="allow-fill"')
+    // A tap or brush must do nothing: Allow has no click path to a decision…
+    expect(html).not.toMatch(/approve-allow'\)\s*\.addEventListener\('click'/)
+    // …while Deny and Ask-in-terminal remain single taps.
+    expect(html).toMatch(/approve-deny'\)\s*\.addEventListener\('click'/)
+    expect(html).toMatch(/approve-ask'\)\s*\.addEventListener\('click'/)
   })
 
   it('service worker renders a permission push distinctly — its own tag, never collapsed into a done alert', async () => {

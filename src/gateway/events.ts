@@ -23,6 +23,11 @@ export type ToolEventInput = {
   readonly risk: BashRisk
 }
 
+/** D15 collapsed to what the card needs: only classifier-`high` commands
+ * stretch the Allow hold — the ticker's `highlighted` tier keeps the
+ * standard one, so it arrives here as `routine`. */
+export type PermissionRisk = 'high' | 'routine'
+
 /** A held permission dialog awaiting the deck's answer — the approval card. */
 export type PermissionEventInput = {
   readonly type: 'permission'
@@ -32,6 +37,7 @@ export type PermissionEventInput = {
   readonly promptId: string
   readonly tool: string
   readonly detail: string
+  readonly risk: PermissionRisk
 }
 
 /** How a held prompt settled; `ask` covers every no-decision path (tap,
