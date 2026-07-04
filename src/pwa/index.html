@@ -156,9 +156,18 @@
     display: flex; flex-direction: column; gap: 3vmin;
     padding: 4vmin; border: 4px solid var(--prompt);
   }
+  #approval-header { display: flex; justify-content: space-between; align-items: baseline; }
   #approval-tool {
     color: var(--prompt); font-size: 3.5vmin; letter-spacing: 0.2em;
   }
+  /* Queue-depth badge: how many prompts wait behind this card. An empty
+     badge (drained queue) collapses to nothing — no ghost chrome. */
+  #queue-badge {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; color: var(--bg); background: var(--prompt);
+    padding: 0 1vmin;
+  }
+  #queue-badge:empty { display: none; }
   #approval-session {
     font-family: 'VT323', ui-monospace, Menlo, monospace;
     font-size: 3vmin; color: var(--dim);
@@ -229,7 +238,10 @@
 <div id="alert-flash"></div>
 
 <section id="approval" class="hidden">
-  <div id="approval-tool"></div>
+  <div id="approval-header">
+    <div id="approval-tool"></div>
+    <div id="queue-badge"></div>
+  </div>
   <div id="approval-session"></div>
   <pre id="approval-payload"></pre>
   <div id="approval-actions">
@@ -254,6 +266,7 @@
     initialPrompts,
     initialTicker,
     localEventTime,
+    queueBadge,
     reduceDeck,
     reducePrompts,
     reduceTicker,
@@ -276,6 +289,7 @@
   const approvalTool = document.getElementById('approval-tool')
   const approvalSession = document.getElementById('approval-session')
   const approvalPayload = document.getElementById('approval-payload')
+  const queueBadgeEl = document.getElementById('queue-badge')
 
   let state = initialDeckState
   let ticker = initialTicker
@@ -422,7 +436,11 @@
     }
     approval.classList.remove('hidden')
     approvalTool.textContent = '▲ ' + current.tool
-    approvalSession.textContent = current.title
+    // The session label tells two prompts from one project apart; the badge
+    // says how many more wait behind this card (empty once the queue drains).
+    approvalSession.textContent =
+      current.title + (current.sessionId ? ' · ' + current.sessionId.slice(0, 8) : '')
+    queueBadgeEl.textContent = queueBadge(prompts)
     // Command text is untrusted input — textContent only, never markup.
     approvalPayload.textContent = current.detail
     if (current.promptId !== shownPromptId) {

@@ -158,7 +158,10 @@ token, so a forced rebrand is an asset swap, not a refactor.
 - `permissions.defaultMode` stays `"default"`. The spec's `dontAsk` recommendation is dropped:
   wrong key name, and it removes the terminal fallback this design depends on.
 - Concurrent prompts (any sessions): FIFO queue on the deck, one rendered at a time,
-  queue-depth badge.
+  queue-depth badge. The badge counts what waits *behind* the visible card (`+N QUEUED`) —
+  the takeover itself already announces the first prompt — and disappears when nothing waits.
+  Cards carry a session label (`title · sessionId prefix`) so two sessions in one project
+  are tellable apart.
 - Approval surfaces always show `tool_name` and the salient `tool_input` (command text,
   file path) — no blind approvals.
 - All ClaudeDeck state is in-memory; a gateway restart loses only ticker history and any

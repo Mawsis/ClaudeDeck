@@ -87,6 +87,49 @@ describe('pending-prompt store', () => {
     expect(store.resolve('no-such-prompt', { behavior: 'allow' })).toBe(false)
   })
 
+  it('runs an independent fallback timer per prompt — a staggered second hold keeps its own deadline', async () => {
+    vi.useFakeTimers()
+    const store = createPendingPromptStore({ hasDeck: () => true, timeoutMs: 1_000 })
+
+    const first = store.hold()
+    await vi.advanceTimersByTimeAsync(400)
+    const second = store.hold()
+
+    const settled = { first: false, second: false }
+    void first.decision.then(() => {
+      settled.first = true
+    })
+    void second.decision.then(() => {
+      settled.second = true
+    })
+
+    // First deadline passes: only the older prompt falls back.
+    await vi.advanceTimersByTimeAsync(600)
+    expect(settled).toEqual({ first: true, second: false })
+
+    // The second keeps its own full window, measured from its own hold.
+    await vi.advanceTimersByTimeAsync(399)
+    expect(settled.second).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(settled.second).toBe(true)
+  })
+
+  it('settles concurrent holds independently — answering one leaves the others pending', async () => {
+    const store = createPendingPromptStore({ hasDeck: () => true })
+    const first = store.hold()
+    const second = store.hold()
+    const third = store.hold()
+
+    expect(store.resolve(second.id, { behavior: 'deny' })).toBe(true)
+    await expect(second.decision).resolves.toEqual({ behavior: 'deny' })
+
+    // The neighbors are untouched and still answerable, in any order.
+    expect(store.resolve(first.id, { behavior: 'allow' })).toBe(true)
+    expect(store.resolve(third.id, null)).toBe(true)
+    await expect(first.decision).resolves.toEqual({ behavior: 'allow' })
+    await expect(third.decision).resolves.toBeNull()
+  })
+
   it('falls back immediately with no decision while paused — D5 passthrough is an instant ask', async () => {
     const store = createPendingPromptStore({ hasDeck: () => true, isPaused: () => true })
 

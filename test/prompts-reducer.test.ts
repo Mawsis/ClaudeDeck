@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allowHoldMs, initialPrompts, reducePrompts } from '../src/pwa/deck-reducer.js'
+import { allowHoldMs, initialPrompts, queueBadge, reducePrompts } from '../src/pwa/deck-reducer.js'
 
 const permissionEvent = (promptId: string, overrides: Record<string, unknown> = {}) => ({
   type: 'permission',
@@ -19,7 +19,14 @@ describe('prompts reducer', () => {
 
     expect(initialPrompts).toEqual([])
     expect(prompts).toEqual([
-      { promptId: 'p-1', title: 'my-app', tool: 'Bash', detail: 'rm -rf build', risk: 'routine' },
+      {
+        promptId: 'p-1',
+        sessionId: 's1',
+        title: 'my-app',
+        tool: 'Bash',
+        detail: 'rm -rf build',
+        risk: 'routine',
+      },
     ])
   })
 
@@ -77,6 +84,19 @@ describe('prompts reducer', () => {
     expect(allowHoldMs('high')).toBeGreaterThanOrEqual(2 * allowHoldMs('routine'))
   })
 
+  it('labels each card with its session — two sessions in one project must be tellable apart', () => {
+    let prompts = reducePrompts(initialPrompts, permissionEvent('p-1', { sessionId: 's1' }))
+    prompts = reducePrompts(prompts, permissionEvent('p-2', { sessionId: 's2' }))
+
+    expect(prompts.map((prompt) => prompt.sessionId)).toEqual(['s1', 's2'])
+  })
+
+  it('normalizes an absent sessionId to an empty string — external JSON never renders as "undefined"', () => {
+    const prompts = reducePrompts(initialPrompts, permissionEvent('p-1', { sessionId: undefined }))
+
+    expect(prompts[0]!.sessionId).toBe('')
+  })
+
   it('queues FIFO — the deck answers prompts in arrival order', () => {
     let prompts = initialPrompts
     for (const id of ['p-1', 'p-2', 'p-3']) {
@@ -84,5 +104,33 @@ describe('prompts reducer', () => {
     }
 
     expect(prompts.map((prompt) => prompt.promptId)).toEqual(['p-1', 'p-2', 'p-3'])
+  })
+
+  // The takeover already IS the first prompt; the badge answers "what's
+  // behind it?" — so it counts the rest and vanishes when nothing waits.
+  it('shows queue depth behind the visible card and clears as the queue drains', () => {
+    let prompts = initialPrompts
+    expect(queueBadge(prompts)).toBe('')
+
+    prompts = reducePrompts(prompts, permissionEvent('p-1'))
+    expect(queueBadge(prompts)).toBe('')
+
+    prompts = reducePrompts(prompts, permissionEvent('p-2'))
+    prompts = reducePrompts(prompts, permissionEvent('p-3'))
+    expect(queueBadge(prompts)).toBe('+2 QUEUED')
+
+    prompts = reducePrompts(prompts, {
+      type: 'permission-resolved',
+      promptId: 'p-1',
+      outcome: 'allow',
+    })
+    expect(queueBadge(prompts)).toBe('+1 QUEUED')
+
+    prompts = reducePrompts(prompts, {
+      type: 'permission-resolved',
+      promptId: 'p-2',
+      outcome: 'ask',
+    })
+    expect(queueBadge(prompts)).toBe('')
   })
 })

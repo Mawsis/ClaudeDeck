@@ -135,6 +135,38 @@ describe('permission hold contract', () => {
     await deck.close()
   })
 
+  it('holds two simultaneous prompts from different sessions — streamed in arrival order, each labeled, each answered on its own hook', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    const firstHook = postPermission(app, permissionPayload({ session_id: 'sess-a' }))
+    await deck.readUntil('"sessionId":"sess-a"')
+    const secondHook = postPermission(
+      app,
+      permissionPayload({ session_id: 'sess-b', tool_input: { command: 'git push --force' } }),
+    )
+    const frames = await deck.readUntil('"sessionId":"sess-b"')
+
+    // Arrival order on the stream is the deck's queue order, each frame
+    // carrying its session label.
+    const held = [...frames.matchAll(/"sessionId":"(sess-[ab])".*?"promptId":"([^"]+)"/g)].map(
+      ([, sessionId, promptId]) => ({ sessionId, promptId }),
+    )
+    expect(held.map((frame) => frame.sessionId)).toEqual(['sess-a', 'sess-b'])
+
+    // Answer in arrival order; each decision lands on its own held hook.
+    await resolvePrompt(app, held[0]!.promptId!, 'allow')
+    await resolvePrompt(app, held[1]!.promptId!, 'deny')
+
+    expect(await (await firstHook).json()).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
+    })
+    expect(await (await secondHook).json()).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny' } },
+    })
+    await deck.close()
+  })
+
   it('rejects a double resolution — the second tap hits an already-settled prompt', async () => {
     const { app } = buildApp()
     const deck = await openDeck(app)

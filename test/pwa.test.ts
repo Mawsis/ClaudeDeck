@@ -108,6 +108,18 @@ describe('PWA shell', () => {
     expect(html).toContain('id="approval"')
   })
 
+  it('shows the queue on the takeover: depth badge from the shared reducer, card labeled with its session', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The badge is the reducer's word, not a page-side count.
+    expect(html).toContain('queueBadge')
+    expect(html).toContain('id="queue-badge"')
+    // Two sessions in one project must be tellable apart on the card.
+    expect(html).toContain('sessionId')
+  })
+
   it('recovers from a rejected token: a definitive 401/403 clears the saved token and re-shows the form', async () => {
     const { app } = buildApp()
 

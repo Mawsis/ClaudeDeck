@@ -184,7 +184,7 @@ export function reduceTicker(ticker, event) {
 }
 
 /**
- * @typedef {{ promptId: string, title: string, tool: string, detail: string,
+ * @typedef {{ promptId: string, sessionId: string, title: string, tool: string, detail: string,
  *   risk: 'high' | 'routine' }} PendingPrompt
  */
 
@@ -195,8 +195,8 @@ export const initialPrompts = Object.freeze([])
  * Pending approval cards, oldest first — the deck renders prompts[0].
  *
  * @param {readonly PendingPrompt[]} prompts
- * @param {{ type: string, promptId?: string, title?: string, tool?: string, detail?: string,
- *   risk?: string, outcome?: string }} event a deck SSE frame — external JSON, so fields are
+ * @param {{ type: string, promptId?: string, sessionId?: string, title?: string, tool?: string,
+ *   detail?: string, risk?: string, outcome?: string }} event a deck SSE frame — external JSON, so fields are
  *   normalized, not trusted.
  * @returns {readonly PendingPrompt[]}
  */
@@ -213,6 +213,7 @@ export function reducePrompts(prompts, event) {
     ...prompts,
     {
       promptId: String(event.promptId ?? ''),
+      sessionId: String(event.sessionId ?? ''),
       title: String(event.title ?? ''),
       tool: String(event.tool ?? ''),
       detail: String(event.detail ?? ''),
@@ -221,6 +222,18 @@ export function reducePrompts(prompts, event) {
       risk: event.risk === 'high' ? /** @type {const} */ ('high') : /** @type {const} */ ('routine'),
     },
   ]
+}
+
+/**
+ * Queue-depth badge for the takeover: the visible card is prompts[0], so the
+ * badge counts what waits behind it and disappears when nothing does.
+ *
+ * @param {readonly PendingPrompt[]} prompts
+ * @returns {string} badge text, empty when the queue has drained
+ */
+export function queueBadge(prompts) {
+  const waiting = prompts.length - 1
+  return waiting > 0 ? `+${waiting} QUEUED` : ''
 }
 
 /** D15: long enough to stop a brush, short enough not to punish every allow. */
