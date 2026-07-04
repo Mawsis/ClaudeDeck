@@ -30,7 +30,7 @@ async function showAlert(data) {
     // done alert, and requireInteraction because it stays true until answered.
     await self.registration.showNotification(`▲ PERMISSION — ${title}`, {
       body: `${tool} ${detail}`.trim(),
-      tag: 'claudedeck-permission',
+      tag: 'slopdeck-permission',
       requireInteraction: true,
     })
     return
@@ -40,7 +40,7 @@ async function showAlert(data) {
   await self.registration.showNotification(`■ DONE — ${title}`, {
     body: `Claude finished${elapsed}`,
     // Repeats collapse into one notification; the newest wins.
-    tag: 'claudedeck-done',
+    tag: 'slopdeck-done',
   })
 }
 

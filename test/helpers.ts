@@ -5,7 +5,12 @@ export const HOOK_TOKEN = 'hook-token-for-tests-0123456789abcdef'
 export const DECK_TOKEN = 'deck-token-for-tests-0123456789abcdef'
 
 export function buildApp(
-  options: { now?: () => number; alerts?: AlertsConfig; permissionTimeoutMs?: number } = {},
+  options: {
+    now?: () => number
+    alerts?: AlertsConfig
+    permissionTimeoutMs?: number
+    questionTimeoutMs?: number
+  } = {},
 ) {
   const eventLog = createEventLog(options.now ? { now: options.now } : {})
   const app = createApp({
@@ -15,6 +20,9 @@ export function buildApp(
     ...(options.alerts ? { alerts: options.alerts } : {}),
     ...(options.permissionTimeoutMs !== undefined
       ? { permissionTimeoutMs: options.permissionTimeoutMs }
+      : {}),
+    ...(options.questionTimeoutMs !== undefined
+      ? { questionTimeoutMs: options.questionTimeoutMs }
       : {}),
   })
   return { app, eventLog }

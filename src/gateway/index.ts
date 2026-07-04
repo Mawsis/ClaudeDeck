@@ -23,11 +23,12 @@ const app = createApp({
   deckToken: config.deckToken,
   eventLog: createEventLog(),
   alerts,
+  questionTimeoutMs: config.questionTimeoutMs,
 })
 
 serve({ fetch: app.fetch, port: config.port }, (info) => {
   console.log(
-    `claudedeck gateway listening on :${info.port}` +
+    `slopdeck gateway listening on :${info.port}` +
       (config.vapid === undefined ? ' (web push disabled — no VAPID keys)' : ''),
   )
 })

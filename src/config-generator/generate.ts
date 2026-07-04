@@ -1,4 +1,4 @@
-export const HOOK_TOKEN_ENV_VAR = 'CLAUDEDECK_HOOK_TOKEN'
+export const HOOK_TOKEN_ENV_VAR = 'SLOPDECK_HOOK_TOKEN'
 
 export type HttpHook = {
   readonly type: 'http'
@@ -44,7 +44,7 @@ function normalizeGatewayUrl(raw: string): string {
 }
 
 /**
- * Emits the Claude Code settings block registering ClaudeDeck's hooks:
+ * Emits the Claude Code settings block registering slopdeck's hooks:
  * lifecycle (Stop + UserPromptSubmit), ticker (PostToolUse), and the
  * permission gate (PermissionRequest — fires only when a dialog would
  * genuinely appear, so allowlisted commands never reach the deck, per D3).

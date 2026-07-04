@@ -1,4 +1,4 @@
-# ClaudeDeck
+# slopdeck
 
 Ambient phone-as-deck companion + remote permission control for Claude Code.
 Design record: [DECISIONS.md](DECISIONS.md).
@@ -22,7 +22,7 @@ everything else renders as a dim one-liner.
 
 **Completion alerts** stay meaningful: the shared reducer decides them, and a
 `Stop` alerts only when the turn ran at least the threshold (45s default,
-`CLAUDEDECK_ALERT_THRESHOLD_MS` to change) — short chat turns stay silent.
+`SLOPDECK_ALERT_THRESHOLD_MS` to change) — short chat turns stay silent.
 Channel follows visibility: a visible deck gets a green boundary flash and a
 vibration tap; a backgrounded or locked phone gets a Web Push notification
 carrying the session title (enable by setting the VAPID variables from
@@ -52,9 +52,16 @@ the config generator additionally registers a `PreToolUse` http hook matched to
 `AskUserQuestion` alone. The gateway holds the call, the deck renders the
 question with one tap-target per choice (plus an Ask-in-terminal escape), and
 the tapped choice returns as `permissionDecision: "deny"` with reason
-`User selected: <choice>` — which Claude reads as the answer. Every fallback
-(no deck, pause, 540s silence, unrecognized payload shape) returns
-`permissionDecision: "ask"` so the question renders in the terminal normally.
+`User selected: <choice>` — which Claude reads as the answer. Multi-question
+calls step through the card one question at a time, and `multiSelect`
+questions render toggleable choices with a CONFIRM tap; either way the deck's
+answers recombine into that one deny reason (`User answered — Auth method:
+OAuth; Database: Postgres`). Every fallback (no deck, pause, timeout,
+unrecognized payload shape) returns `permissionDecision: "ask"` so the
+question renders in the terminal normally. An unanswered card falls back after
+60s total for the whole call (`SLOPDECK_QUESTION_TIMEOUT_MS` to change) — a
+stale answer to a question mid-plan is worse than a terminal re-ask;
+permission prompts keep their 540s window.
 This rides on **undocumented behavior**, so it ships behind its own flag and
 hook matcher, and occasional terminal re-asks are expected, not bugs.
 
@@ -76,8 +83,8 @@ detector fires) means the hack broke in a Claude Code update — disable
 npm install
 npm test                 # vitest suite (unit + e2e tracer)
 npm run typecheck
-CLAUDEDECK_HOOK_TOKEN=$(openssl rand -hex 32) \
-CLAUDEDECK_DECK_TOKEN=$(openssl rand -hex 32) \
+SLOPDECK_HOOK_TOKEN=$(openssl rand -hex 32) \
+SLOPDECK_DECK_TOKEN=$(openssl rand -hex 32) \
 npm run dev              # gateway + PWA on :8484
 ```
 
@@ -99,5 +106,5 @@ npm run generate-config -- --gateway-url https://your-deck-domain
 ```
 
 Merge the printed JSON into `~/.claude/settings.json`, export
-`CLAUDEDECK_HOOK_TOKEN` in your shell, and open the gateway URL on the phone —
+`SLOPDECK_HOOK_TOKEN` in your shell, and open the gateway URL on the phone —
 paste the deck token once when prompted.

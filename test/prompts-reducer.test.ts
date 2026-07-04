@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { allowHoldMs, initialPrompts, queueBadge, reducePrompts } from '../src/pwa/deck-reducer.js'
+import {
+  allowHoldMs,
+  draftAnswers,
+  initialPrompts,
+  initialQuestionDraft,
+  queueBadge,
+  reducePrompts,
+  reduceQuestionDraft,
+} from '../src/pwa/deck-reducer.js'
 
 const permissionEvent = (promptId: string, overrides: Record<string, unknown> = {}) => ({
   type: 'permission',
@@ -107,7 +115,7 @@ describe('prompts reducer', () => {
     expect(prompts.map((prompt) => prompt.promptId)).toEqual(['p-1', 'p-2', 'p-3'])
   })
 
-  it('holds an arriving question as a card with tappable options, in the same FIFO queue', () => {
+  it('holds an arriving question as a card carrying the full question set, in the same FIFO queue', () => {
     let prompts = reducePrompts(initialPrompts, permissionEvent('p-1'))
     prompts = reducePrompts(prompts, {
       type: 'question',
@@ -115,8 +123,15 @@ describe('prompts reducer', () => {
       sessionId: 's1',
       title: 'my-app',
       promptId: 'q-1',
-      question: 'Which auth method?',
-      options: ['OAuth', 'API key'],
+      questions: [
+        {
+          question: 'Which auth method?',
+          header: 'Auth method',
+          options: ['OAuth', 'API key'],
+          multiSelect: false,
+        },
+        { question: 'Which features?', header: 'Features', options: ['Auth', 'Billing'], multiSelect: true },
+      ],
       at: 11_000,
     })
 
@@ -124,8 +139,15 @@ describe('prompts reducer', () => {
     expect(prompts[0]!.kind).toBe('permission')
     expect(prompts[1]).toMatchObject({
       kind: 'question',
-      question: 'Which auth method?',
-      options: ['OAuth', 'API key'],
+      questions: [
+        {
+          question: 'Which auth method?',
+          header: 'Auth method',
+          options: ['OAuth', 'API key'],
+          multiSelect: false,
+        },
+        { question: 'Which features?', header: 'Features', options: ['Auth', 'Billing'], multiSelect: true },
+      ],
     })
   })
 
@@ -136,8 +158,9 @@ describe('prompts reducer', () => {
       sessionId: 's1',
       title: 'my-app',
       promptId: 'q-1',
-      question: 'Which auth method?',
-      options: ['OAuth', 'API key'],
+      questions: [
+        { question: 'Which auth method?', header: '', options: ['OAuth', 'API key'], multiSelect: false },
+      ],
       at: 11_000,
     }
     const once = reducePrompts(initialPrompts, question)
@@ -148,15 +171,22 @@ describe('prompts reducer', () => {
     expect(after).toEqual([])
   })
 
-  it('normalizes junk option entries to strings — external JSON never renders as objects', () => {
+  it('normalizes junk question entries — external JSON never renders as objects', () => {
     const prompts = reducePrompts(initialPrompts, {
       type: 'question',
       promptId: 'q-1',
-      question: 'Pick one',
-      options: ['OK', 42, null],
+      questions: [
+        { question: 'Pick one', header: 7, options: ['OK', 42, null], multiSelect: 'yes' },
+        'junk',
+      ],
     })
 
-    expect(prompts[0]).toMatchObject({ options: ['OK', '42', ''] })
+    expect(prompts[0]).toMatchObject({
+      questions: [
+        { question: 'Pick one', header: '', options: ['OK', '42', ''], multiSelect: false },
+        { question: '', header: '', options: [], multiSelect: false },
+      ],
+    })
   })
 
   // The takeover already IS the first prompt; the badge answers "what's
@@ -185,5 +215,84 @@ describe('prompts reducer', () => {
       outcome: 'ask',
     })
     expect(queueBadge(prompts)).toBe('')
+  })
+})
+
+// The multi-step answering flow is pure state: the card's question set plus a
+// draft of what's been chosen so far. index.html only wires taps to actions
+// and posts draftAnswers() once every question is answered.
+describe('question draft reducer', () => {
+  const single = (question: string, options: string[]) => ({
+    question,
+    header: '',
+    options,
+    multiSelect: false,
+  })
+  const multi = (question: string, options: string[]) => ({
+    question,
+    header: '',
+    options,
+    multiSelect: true,
+  })
+
+  it('steps through single-select questions — each tap records the choice and advances', () => {
+    const questions = [single('Auth?', ['OAuth', 'API key']), single('DB?', ['Postgres', 'SQLite'])]
+
+    let draft = initialQuestionDraft
+    expect(draftAnswers(questions, draft)).toBeNull()
+
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'OAuth' })
+    expect(draft.step).toBe(1)
+    expect(draftAnswers(questions, draft)).toBeNull()
+
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'Postgres' })
+    expect(draftAnswers(questions, draft)).toEqual([['OAuth'], ['Postgres']])
+  })
+
+  it('toggles multiSelect choices and only advances on confirm', () => {
+    const questions = [multi('Features?', ['Auth', 'Billing', 'Search'])]
+
+    let draft = initialQuestionDraft
+    // Confirm with nothing selected is a no-op — an empty set is not an answer.
+    expect(reduceQuestionDraft(questions, draft, { type: 'confirm' })).toBe(draft)
+
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'Auth' })
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'Billing' })
+    // A second tap deselects — the toggle must be reversible.
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'Billing' })
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'Search' })
+    expect(draft.selected).toEqual(['Auth', 'Search'])
+    expect(draftAnswers(questions, draft)).toBeNull()
+
+    draft = reduceQuestionDraft(questions, draft, { type: 'confirm' })
+    expect(draftAnswers(questions, draft)).toEqual([['Auth', 'Search']])
+  })
+
+  it('resets the toggle set between steps — selections must not leak to the next question', () => {
+    const questions = [
+      multi('Features?', ['Auth', 'Billing']),
+      multi('Regions?', ['EU', 'US']),
+    ]
+
+    let draft = initialQuestionDraft
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'Auth' })
+    draft = reduceQuestionDraft(questions, draft, { type: 'confirm' })
+    expect(draft.step).toBe(1)
+    expect(draft.selected).toEqual([])
+
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'EU' })
+    draft = reduceQuestionDraft(questions, draft, { type: 'confirm' })
+    expect(draftAnswers(questions, draft)).toEqual([['Auth'], ['EU']])
+  })
+
+  it('ignores actions once every question is answered — a stray tap must not corrupt the set', () => {
+    const questions = [single('Auth?', ['OAuth', 'API key'])]
+
+    let draft = initialQuestionDraft
+    draft = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'OAuth' })
+    const settled = reduceQuestionDraft(questions, draft, { type: 'tap', choice: 'API key' })
+
+    expect(settled).toBe(draft)
+    expect(draftAnswers(questions, draft)).toEqual([['OAuth']])
   })
 })

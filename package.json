@@ -1,5 +1,5 @@
 {
-  "name": "claudedeck",
+  "name": "slopdeck",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "generate-config": "node --experimental-strip-types src/config-generator/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "canary": "CLAUDEDECK_CANARY=1 vitest run test/canary.askuserquestion.test.ts",
+    "canary": "SLOPDECK_CANARY=1 vitest run test/canary.askuserquestion.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

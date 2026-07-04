@@ -9,7 +9,7 @@ describe('PWA shell', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('content-type')).toContain('text/html')
-    expect(await response.text()).toContain('ClaudeDeck')
+    expect(await response.text()).toContain('slopdeck')
   })
 
   it('renders the deck as a dumb projection: imports the reducer, listens to prompt and stop, holds a wake lock', async () => {
@@ -245,8 +245,8 @@ describe('PWA shell', () => {
     // A permission prompt blocks a session — it must not overwrite, nor be
     // overwritten by, a routine done notification.
     expect(sw).toContain("kind === 'permission'")
-    expect(sw).toContain('claudedeck-permission')
-    expect(sw).toContain('claudedeck-done')
+    expect(sw).toContain('slopdeck-permission')
+    expect(sw).toContain('slopdeck-done')
     expect(sw).toContain('PERMISSION')
   })
 

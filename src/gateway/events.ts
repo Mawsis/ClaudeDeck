@@ -61,16 +61,24 @@ export type PermissionResolvedEventInput = {
   readonly outcome: PermissionOutcome
 }
 
-/** A held AskUserQuestion awaiting the deck's tap — one card, tappable
- * choices (D3's flagged hack). */
+/** One question of an AskUserQuestion call, as the deck renders it. An empty
+ * header means the tool sent none; the deck labels with the question text. */
+export type QuestionSpec = {
+  readonly question: string
+  readonly header: string
+  readonly options: readonly string[]
+  readonly multiSelect: boolean
+}
+
+/** A held AskUserQuestion awaiting the deck's answers — one card that steps
+ * through the full question set (D3's flagged hack). */
 export type QuestionEventInput = {
   readonly type: 'question'
   readonly sessionId: string
   readonly title: string
   readonly cwd: string
   readonly promptId: string
-  readonly question: string
-  readonly options: readonly string[]
+  readonly questions: readonly QuestionSpec[]
 }
 
 /** How a held question settled; `ask` covers every no-answer path (timeout,

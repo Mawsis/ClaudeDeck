@@ -29,6 +29,8 @@ export type AppConfig = AuthTokens & {
   readonly alerts?: AlertsConfig
   /** Test seam only — production uses the 540s D4 default. */
   readonly permissionTimeoutMs?: number
+  /** Question hold window; defaults to 60s, separate from the 540s permission policy. */
+  readonly questionTimeoutMs?: number
 }
 
 const DEFAULT_MAX_STREAM_CLIENTS = 8
@@ -243,15 +245,16 @@ export function createApp(config: AppConfig) {
     timeoutMs: config.permissionTimeoutMs,
   })
 
-  // The AskUserQuestion hack shares the permission gate's hold policy (D3/D4):
-  // the route always exists — the opt-in feature flag lives in the generated
-  // hook config, so an un-flagged workstation simply never calls it.
+  // The AskUserQuestion hack shares the permission gate's fallback policy
+  // (D3/D4) but not its timeout — questions hold for 60s, not 540s. The route
+  // always exists — the opt-in feature flag lives in the generated hook
+  // config, so an un-flagged workstation simply never calls it.
   registerQuestionRoutes(app, {
     tokens,
     eventLog,
     hasDeck: () => activeStreamClosers.length > 0,
     isPaused: () => pauseState.isPaused(),
-    timeoutMs: config.permissionTimeoutMs,
+    timeoutMs: config.questionTimeoutMs,
   })
 
   // A tap toggles interception and broadcasts the new mode through the log, so

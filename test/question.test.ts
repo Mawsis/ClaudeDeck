@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildApp, DECK_TOKEN, HOOK_TOKEN } from './helpers.ts'
 
 /** Opens a deck SSE stream and reads frames until a marker appears. */
@@ -80,12 +80,15 @@ describe('question hold contract', () => {
     const hookResponsePromise = postQuestion(app)
 
     const frames = await deck.readUntil('event: question')
-    expect(frames).toContain('"question":"Which auth method should we use?"')
-    expect(frames).toContain('"options":["OAuth","API key"]')
+    // The event carries the full question set — text, header, options, and
+    // the multiSelect flag per question — so the deck can render any shape.
+    expect(frames).toContain(
+      '"questions":[{"question":"Which auth method should we use?","header":"Auth method","options":["OAuth","API key"],"multiSelect":false}]',
+    )
     expect(frames).toContain('"title":"my-app"')
     const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
 
-    const answerResponse = await answerQuestion(app, promptId, { choice: 'API key' })
+    const answerResponse = await answerQuestion(app, promptId, { answers: [['API key']] })
     expect(answerResponse.status).toBe(200)
 
     // The deny reason is the transport for the selection (D3) — Claude reads
@@ -126,7 +129,7 @@ describe('question hold contract', () => {
   })
 
   it('falls back to "ask" when a connected deck stays silent past the timeout, and clears the card', async () => {
-    const { app } = buildApp({ permissionTimeoutMs: 30 })
+    const { app } = buildApp({ questionTimeoutMs: 30 })
     const deck = await openDeck(app)
 
     const response = await postQuestion(app)
@@ -138,6 +141,143 @@ describe('question hold contract', () => {
     const frames = await deck.readUntil('event: question-resolved')
     expect(frames).toContain('"outcome":"ask"')
     deck.close()
+  })
+
+  it('holds a multi-question payload, streams the full set, and composes all answers into one deny reason', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    const hookResponsePromise = postQuestion(
+      app,
+      questionPayload({
+        tool_input: {
+          questions: [
+            {
+              question: 'Which auth method?',
+              header: 'Auth method',
+              options: [{ label: 'OAuth' }, { label: 'API key' }],
+            },
+            {
+              question: 'Which database?',
+              header: 'Database',
+              options: [{ label: 'Postgres' }, { label: 'SQLite' }],
+            },
+          ],
+        },
+      }),
+    )
+
+    const frames = await deck.readUntil('event: question')
+    expect(frames).toContain('"question":"Which auth method?"')
+    expect(frames).toContain('"question":"Which database?"')
+    const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
+
+    const answerResponse = await answerQuestion(app, promptId, {
+      answers: [['OAuth'], ['Postgres']],
+    })
+    expect(answerResponse.status).toBe(200)
+
+    // One held hook, one reason string: the deck's sequenced answers
+    // recombine here, labeled by header so Claude can match them back.
+    expect(await (await hookResponsePromise).json()).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'User answered — Auth method: OAuth; Database: Postgres',
+      },
+    })
+    deck.close()
+  })
+
+  it('holds a multiSelect question, flags it on the card, and joins the toggled choices in the deny reason', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    const hookResponsePromise = postQuestion(
+      app,
+      questionPayload({
+        tool_input: {
+          questions: [
+            {
+              question: 'Which features do you want?',
+              header: 'Features',
+              multiSelect: true,
+              options: [{ label: 'Auth' }, { label: 'Billing' }, { label: 'Search' }],
+            },
+          ],
+        },
+      }),
+    )
+
+    const frames = await deck.readUntil('event: question')
+    expect(frames).toContain('"multiSelect":true')
+    const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
+
+    const answerResponse = await answerQuestion(app, promptId, {
+      answers: [['Auth', 'Search']],
+    })
+    expect(answerResponse.status).toBe(200)
+
+    expect(await (await hookResponsePromise).json()).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'User selected: Auth, Search',
+      },
+    })
+    deck.close()
+  })
+
+  describe('with fake timers', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('times out an unanswered question at the 60s default while a permission prompt keeps its 540s window', async () => {
+      // Only setTimeout — SSE streaming must keep running on real scheduling.
+      vi.useFakeTimers({ toFake: ['setTimeout'] })
+      const { app } = buildApp()
+      const deck = await openDeck(app)
+
+      const questionResponsePromise = postQuestion(app)
+      const permissionResponsePromise = Promise.resolve(
+        app.request('/api/permission', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${HOOK_TOKEN}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            hook_event_name: 'PermissionRequest',
+            session_id: 'sess-q',
+            cwd: '/w/my-app',
+            tool_name: 'Bash',
+            tool_input: { command: 'rm -rf build' },
+          }),
+        }),
+      )
+      await deck.readUntil('event: question')
+
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      // The question hook is back in the terminal's hands…
+      expect(await (await questionResponsePromise).json()).toEqual({
+        hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' },
+      })
+      const frames = await deck.readUntil('event: question-resolved')
+      expect(frames).toContain('"outcome":"ask"')
+
+      // …while the permission prompt is still held until its own 540s window.
+      await vi.advanceTimersByTimeAsync(540_000 - 60_000 - 1)
+      let permissionSettled = false
+      void permissionResponsePromise.then(() => {
+        permissionSettled = true
+      })
+      await Promise.resolve()
+      expect(permissionSettled).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1)
+      // {} is the permission gate's documented no-decision fallback.
+      expect(await (await permissionResponsePromise).json()).toEqual({})
+      deck.close()
+    })
   })
 
   it('falls back to "ask" on an unrecognized tool_input shape instead of erroring', async () => {
@@ -171,10 +311,10 @@ describe('question hold contract', () => {
     const frames = await deck.readUntil('event: question')
     const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
 
-    expect((await answerQuestion(app, 'no-such-id', { choice: 'OAuth' })).status).toBe(404)
-    expect((await answerQuestion(app, promptId, { choice: 'OAuth' })).status).toBe(200)
+    expect((await answerQuestion(app, 'no-such-id', { answers: [['OAuth']] })).status).toBe(404)
+    expect((await answerQuestion(app, promptId, { answers: [['OAuth']] })).status).toBe(200)
     // A double tap must not answer a question that already settled.
-    expect((await answerQuestion(app, promptId, { choice: 'API key' })).status).toBe(404)
+    expect((await answerQuestion(app, promptId, { answers: [['API key']] })).status).toBe(404)
 
     const hookResponse = await hookResponsePromise
     const hookBody = (await hookResponse.json()) as {
@@ -203,11 +343,62 @@ describe('question hold contract', () => {
     deck.close()
   })
 
-  it('rejects an answer without a choice string', async () => {
+  it('rejects an answer set that does not match the questions — the hook stays held and answerable', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    const hookResponsePromise = postQuestion(
+      app,
+      questionPayload({
+        tool_input: {
+          questions: [
+            {
+              question: 'Which auth method?',
+              header: 'Auth method',
+              options: [{ label: 'OAuth' }, { label: 'API key' }],
+            },
+            {
+              question: 'Which features?',
+              header: 'Features',
+              multiSelect: true,
+              options: [{ label: 'Auth' }, { label: 'Billing' }],
+            },
+          ],
+        },
+      }),
+    )
+    const promptId = /"promptId":"([^"]+)"/.exec(await deck.readUntil('event: question'))![1]!
+
+    // A partial or malformed set must not settle the hook: wrong count, two
+    // choices on a single-select, a label that was never an option.
+    for (const bad of [
+      { answers: [['OAuth']] },
+      { answers: [['OAuth', 'API key'], ['Auth']] },
+      { answers: [['OAuth'], ['Espresso']] },
+    ]) {
+      expect((await answerQuestion(app, promptId, bad)).status).toBe(400)
+    }
+
+    // The card is still live — a corrected answer settles it normally.
+    expect(
+      (await answerQuestion(app, promptId, { answers: [['OAuth'], ['Auth', 'Billing']] })).status,
+    ).toBe(200)
+    expect(await (await hookResponsePromise).json()).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'User answered — Auth method: OAuth; Features: Auth, Billing',
+      },
+    })
+    deck.close()
+  })
+
+  it('rejects an answer body that is neither { answers } nor { ask: true }', async () => {
     const { app } = buildApp()
 
-    const response = await answerQuestion(app, 'any-id', { choice: '' })
-
-    expect(response.status).toBe(400)
+    // The retired single-choice format included — one wire format, no aliases.
+    for (const bad of [{ choice: 'OAuth' }, { answers: 'OAuth' }, {}]) {
+      expect((await answerQuestion(app, 'any-id', bad)).status).toBe(400)
+    }
   })
 })

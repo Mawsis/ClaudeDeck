@@ -34,7 +34,7 @@ describe('bash classifier', () => {
     ['pip install -r requirements.txt', 'package-install'],
     ['brew install caddy', 'package-install'],
     ['docker compose up -d --build', 'docker'],
-    ['docker build -t claudedeck .', 'docker'],
+    ['docker build -t slopdeck .', 'docker'],
     ['git push origin main', 'git-push'],
     ['git commit -m "wip" && git push', 'git-push'],
   ] as const)('highlights %s as %s', (command, category) => {

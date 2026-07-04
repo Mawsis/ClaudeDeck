@@ -1,4 +1,4 @@
-# ClaudeDeck — Design Decision Record
+# slopdeck — Design Decision Record
 
 Product: ambient phone-as-deck companion + remote permission control for Claude Code.
 Source spec: `claudedeck_specification.pdf` (July 2026). This document supersedes the spec
@@ -27,7 +27,7 @@ match the documented behavior (see "Spec corrections" below).
 - Timer lifecycle events: `UserPromptSubmit` (turn starts) and `Stop` (turn ends) exist and
   carry `session_id`, `cwd`.
 - Prior art: official **Remote Control** (`claude remote-control`, research preview since
-  Feb 2026) already offers approve/monitor/steer from the Claude mobile app. ClaudeDeck's
+  Feb 2026) already offers approve/monitor/steer from the Claude mobile app. slopdeck's
   differentiation is the ambient, always-on, zero-launch desk deck — not remote approval itself.
 
 ## Decisions
@@ -61,12 +61,20 @@ Full remote resolution, two mechanisms:
 ### D4. Timeout / fallback policy
 Never auto-deny (supersedes spec §5's 9-minute deny valve). "Fall back" means the gateway
 responds **without a decision**, letting the terminal dialog appear normally:
-- No deck connected → fall back **immediately** (zero added latency, ClaudeDeck invisible).
+- No deck connected → fall back **immediately** (zero added latency, slopdeck invisible).
 - Deck connected but silent → fall back at **540s** (under the 600s hook default).
-- Gateway unreachable → hook errors are non-blocking; terminal behaves as if ClaudeDeck
+- Gateway unreachable → hook errors are non-blocking; terminal behaves as if slopdeck
   didn't exist (verified platform behavior, no config needed).
 For the `AskUserQuestion` hack (`PreToolUse`), the same policy applies with
-`permissionDecision: "ask"` as the fallback response.
+`permissionDecision: "ask"` as the fallback response, except the silent-deck window is
+**60s** (`SLOPDECK_QUESTION_TIMEOUT_MS`) — a stale answer to a question mid-plan derails
+the session, while a timed-out question just re-renders in the terminal. The window is
+**total for the whole call**: multi-question payloads step through one card (one hold, one
+timer), and every answer recombines into the single deny reason — per-question labels for
+multi-question calls (`User answered — Auth method: OAuth; Database: Postgres`), a joined
+set for `multiSelect` (`User selected: Auth, Search`). The gateway rejects partial or
+mismatched answer sets with a 400 that leaves the hook held, so the reason string can
+never claim an answer the user didn't give.
 
 ### D5. Interception mode
 Always intercept while a deck is connected. The deck UI has a one-tap **Pause** that flips the
@@ -95,10 +103,10 @@ behind Caddy.
 
 ### D10. Auth
 Two scoped static tokens, long random strings in the VPS environment, rotated manually:
-- `CLAUDEDECK_HOOK_TOKEN` — workstation → gateway, sent as
-  `"Authorization": "Bearer $CLAUDEDECK_HOOK_TOKEN"` in hook `headers` with
-  `allowedEnvVars: ["CLAUDEDECK_HOOK_TOKEN"]` (never plaintext in settings.json).
-- `CLAUDEDECK_DECK_TOKEN` — phone → gateway (SSE + resolution POSTs), pasted once into
+- `SLOPDECK_HOOK_TOKEN` — workstation → gateway, sent as
+  `"Authorization": "Bearer $SLOPDECK_HOOK_TOKEN"` in hook `headers` with
+  `allowedEnvVars: ["SLOPDECK_HOOK_TOKEN"]` (never plaintext in settings.json).
+- `SLOPDECK_DECK_TOKEN` — phone → gateway (SSE + resolution POSTs), pasted once into
   the PWA and stored locally.
 A leaked deck token cannot forge events; a leaked hook token cannot approve anything.
 
@@ -166,7 +174,7 @@ token, so a forced rebrand is an asset swap, not a refactor.
   are tellable apart.
 - Approval surfaces always show `tool_name` and the salient `tool_input` (command text,
   file path) — no blind approvals.
-- All ClaudeDeck state is in-memory; a gateway restart loses only ticker history and any
+- All slopdeck state is in-memory; a gateway restart loses only ticker history and any
   pending prompt (which then falls back per D4).
 - D11's channel selection is enforced on the phone, at delivery time: the gateway pushes
   every threshold-crossing stop (it mirrors deck state through the same pure reducer), and

@@ -186,10 +186,30 @@ export function reduceTicker(ticker, event) {
 /**
  * @typedef {{ kind: 'permission', promptId: string, sessionId: string, title: string,
  *   tool: string, detail: string, risk: 'high' | 'routine' }} PermissionCard
+ * @typedef {{ question: string, header: string, options: readonly string[],
+ *   multiSelect: boolean }} QuestionSpec
  * @typedef {{ kind: 'question', promptId: string, sessionId: string, title: string,
- *   question: string, options: readonly string[] }} QuestionCard
+ *   questions: readonly QuestionSpec[] }} QuestionCard
  * @typedef {PermissionCard | QuestionCard} PendingPrompt
  */
+
+/**
+ * External JSON never renders as objects — every field is coerced.
+ *
+ * @param {unknown} entry
+ * @returns {QuestionSpec}
+ */
+function normalizeQuestionSpec(entry) {
+  const record = typeof entry === 'object' && entry !== null ? /** @type {Record<string, unknown>} */ (entry) : {}
+  return {
+    question: String(record.question ?? ''),
+    header: typeof record.header === 'string' ? record.header : '',
+    options: (Array.isArray(record.options) ? record.options : []).map((option) =>
+      String(option ?? ''),
+    ),
+    multiSelect: record.multiSelect === true,
+  }
+}
 
 /** @type {readonly PendingPrompt[]} */
 export const initialPrompts = Object.freeze([])
@@ -201,7 +221,7 @@ export const initialPrompts = Object.freeze([])
  * @param {readonly PendingPrompt[]} prompts
  * @param {{ type: string, id?: number, at?: number, promptId?: string, sessionId?: string,
  *   title?: string, tool?: string, detail?: string, risk?: string, outcome?: string,
- *   question?: string, options?: readonly unknown[] }} event a deck SSE frame — external
+ *   questions?: readonly unknown[] }} event a deck SSE frame — external
  *   JSON, so fields are normalized, not trusted.
  * @returns {readonly PendingPrompt[]}
  */
@@ -225,9 +245,8 @@ export function reducePrompts(prompts, event) {
       {
         kind: /** @type {const} */ ('question'),
         ...base,
-        question: String(event.question ?? ''),
-        options: (Array.isArray(event.options) ? event.options : []).map((option) =>
-          String(option ?? ''),
+        questions: (Array.isArray(event.questions) ? event.questions : []).map(
+          normalizeQuestionSpec,
         ),
       },
     ]
@@ -244,6 +263,63 @@ export function reducePrompts(prompts, event) {
       risk: event.risk === 'high' ? /** @type {const} */ ('high') : /** @type {const} */ ('routine'),
     },
   ]
+}
+
+/**
+ * @typedef {{ step: number, answers: readonly (readonly string[])[],
+ *   selected: readonly string[] }} QuestionDraft
+ * @typedef {{ type: 'tap', choice: string } | { type: 'confirm' }} QuestionDraftAction
+ */
+
+/** A fresh card: first question, nothing chosen.
+ * @type {QuestionDraft} */
+export const initialQuestionDraft = Object.freeze({
+  step: 0,
+  answers: Object.freeze([]),
+  selected: Object.freeze([]),
+})
+
+/**
+ * The multi-step answering flow as pure state (one AskUserQuestion call is
+ * answered whole — the gateway rejects partial sets, so the draft only
+ * becomes postable once every question has an answer). A tap answers a
+ * single-select question and advances; on a multiSelect question it toggles
+ * the choice, and only confirm commits the set and advances.
+ *
+ * @param {readonly QuestionSpec[]} questions
+ * @param {QuestionDraft} draft
+ * @param {QuestionDraftAction} action
+ * @returns {QuestionDraft}
+ */
+export function reduceQuestionDraft(questions, draft, action) {
+  const current = questions[draft.step]
+  // Every question already answered (or junk step): nothing left to change.
+  if (current === undefined) return draft
+  if (action.type === 'tap') {
+    if (!current.multiSelect) {
+      return { step: draft.step + 1, answers: [...draft.answers, [action.choice]], selected: [] }
+    }
+    const toggledOff = draft.selected.filter((choice) => choice !== action.choice)
+    return {
+      ...draft,
+      selected:
+        toggledOff.length < draft.selected.length ? toggledOff : [...draft.selected, action.choice],
+    }
+  }
+  // Confirm is meaningful only on a multiSelect step with something chosen —
+  // an empty set is not an answer.
+  if (!current.multiSelect || draft.selected.length === 0) return draft
+  return { step: draft.step + 1, answers: [...draft.answers, draft.selected], selected: [] }
+}
+
+/**
+ * @param {readonly QuestionSpec[]} questions
+ * @param {QuestionDraft} draft
+ * @returns {readonly (readonly string[])[] | null} the complete answer set to
+ *   post, or null while questions remain
+ */
+export function draftAnswers(questions, draft) {
+  return draft.answers.length === questions.length ? draft.answers : null
 }
 
 /**
