@@ -46,6 +46,8 @@ export type PermissionRoutesConfig = {
   readonly eventLog: EventLog
   readonly pushRegistry?: PushRegistry | undefined
   readonly hasDeck: () => boolean
+  /** D5: while paused, a prompt falls back to the terminal instead of holding. */
+  readonly isPaused?: (() => boolean) | undefined
   /** Test seam only — production uses the 540s D4 default. */
   readonly timeoutMs?: number | undefined
 }
@@ -61,6 +63,7 @@ export function registerPermissionRoutes(app: Hono, config: PermissionRoutesConf
 
   const promptStore = createPendingPromptStore({
     hasDeck: config.hasDeck,
+    ...(config.isPaused !== undefined ? { isPaused: config.isPaused } : {}),
     ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
   })
 

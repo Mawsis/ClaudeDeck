@@ -40,6 +40,13 @@ immediately when no deck is connected, at 540s (under the 600s hook timeout)
 when a connected deck stays silent. Prompt arrival always alerts (takeover +
 vibration in view, Web Push otherwise), and prompts queue FIFO, oldest first.
 
+**Pause** is one tap, no arming ritual: it flips the gateway to passthrough, and
+while paused every `PermissionRequest` falls back to the terminal instantly —
+no hold, no card. The mode broadcasts as its own SSE event (replayed on
+reconnect) and is reported by `/api/deck-config`, so a reloaded deck comes back
+with the right accent; the deck tints purple while paused (D14). Tapping again
+resumes interception.
+
 ## Develop
 
 ```bash

@@ -3,19 +3,26 @@
 // JS with JSDoc types instead of TypeScript.
 
 /**
- * @typedef {{ type: 'prompt' | 'stop', sessionId: string, title: string, at: number }} DeckEvent
+ * @typedef {{ type: 'prompt' | 'stop', sessionId: string, title: string, at: number }
+ *   | { type: 'mode', paused: boolean, at: number }} DeckEvent
  * @typedef {{ status: 'running', title: string, since: number }} RunningSession
  * @typedef {{ status: 'done', title: string, elapsedMs: number | null }} DoneSession
  * @typedef {RunningSession | DoneSession} SessionState
- * @typedef {{ activeSessionId: string | null, sessions: Readonly<Record<string, SessionState>> }} DeckState
+ * @typedef {{ activeSessionId: string | null, sessions: Readonly<Record<string, SessionState>>,
+ *   paused: boolean }} DeckState
  * @typedef {{ mode: 'idle' }
  *   | { mode: 'running', title: string, elapsedMs: number }
  *   | { mode: 'done', title: string, elapsedMs: number | null }
- *   | { mode: 'offline' }} DeckView
+ *   | { mode: 'offline' }} DeckViewBase
+ * @typedef {DeckViewBase & { paused?: true }} DeckView
  */
 
 /** @type {DeckState} */
-export const initialDeckState = Object.freeze({ activeSessionId: null, sessions: Object.freeze({}) })
+export const initialDeckState = Object.freeze({
+  activeSessionId: null,
+  sessions: Object.freeze({}),
+  paused: false,
+})
 
 /**
  * @param {DeckState} state
@@ -23,6 +30,12 @@ export const initialDeckState = Object.freeze({ activeSessionId: null, sessions:
  * @returns {DeckState}
  */
 export function reduceDeck(state, event) {
+  // D5: interception mode is orthogonal to the session clock — a pause overlays
+  // whichever session is active without touching the timer or the active id.
+  if (event.type === 'mode') {
+    return { ...state, paused: event.paused }
+  }
+
   const previous = state.sessions[event.sessionId]
 
   /** @type {SessionState} */
@@ -48,6 +61,7 @@ export function reduceDeck(state, event) {
         }
 
   return {
+    ...state,
     activeSessionId: event.sessionId,
     sessions: { ...state.sessions, [event.sessionId]: session },
   }
@@ -61,13 +75,18 @@ export function reduceDeck(state, event) {
  * @returns {DeckView}
  */
 export function deckView(state, now, { connected = true } = {}) {
+  // Offline wins over every other accent: a stale clock is a worse lie than a
+  // stale paused badge, so a down stream must not paint a reassuring mode.
   if (!connected) return { mode: 'offline' }
+  // D5/D14: the purple paused accent overlays whatever session view is active,
+  // added only when set so the intercepting default stays a bare view.
+  const paused = state.paused ? /** @type {const} */ ({ paused: true }) : undefined
   const active = state.activeSessionId === null ? undefined : state.sessions[state.activeSessionId]
-  if (active === undefined) return { mode: 'idle' }
+  if (active === undefined) return { mode: 'idle', ...paused }
   if (active.status === 'running') {
-    return { mode: 'running', title: active.title, elapsedMs: now - active.since }
+    return { mode: 'running', title: active.title, elapsedMs: now - active.since, ...paused }
   }
-  return { mode: 'done', title: active.title, elapsedMs: active.elapsedMs }
+  return { mode: 'done', title: active.title, elapsedMs: active.elapsedMs, ...paused }
 }
 
 /** D11: short conversational turns stay silent — only real work alerts. */

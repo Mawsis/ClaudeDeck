@@ -22,6 +22,10 @@
     /* D14: yellow = prompt pending. The takeover is the one surface allowed
        to sit bright — it exists to be answered, not to be ambient. */
     --prompt: #facc15;
+    /* D14: purple = paused (passthrough). Rendered dim like the other ambient
+       accents — an always-on state must never sit at full saturation. */
+    --paused: #a855f7;
+    --paused-ambient: #6b4a86;
   }
   * { box-sizing: border-box; margin: 0; }
   body {
@@ -83,6 +87,26 @@
   #mode-label { font-size: 2.5vmin; letter-spacing: 0.4em; }
   body[data-mode='running'] #mode-label { color: var(--accent-ambient); }
   body[data-mode='done'] #mode-label { color: var(--done-ambient); }
+
+  /* D5/D14: paused overlays the purple accent onto whatever session is active,
+     readable from peripheral vision. Offline is excluded — a down stream owns
+     the gray-static accent outright, and its rules follow to win regardless. */
+  body[data-paused='true']:not([data-mode='offline']) #digits,
+  body[data-paused='true']:not([data-mode='offline']) #mode-label {
+    color: var(--paused-ambient);
+  }
+  /* The toggle lights purple while paused so the control itself reports state.
+     Ambient chrome: bordered outline, not a saturated fill — it sits on the
+     always-on deck between rare taps. */
+  #pause-toggle {
+    background: var(--bg); color: var(--dim); border: 2px solid var(--dim);
+    font-size: 1.8vmin; letter-spacing: 0.3em; padding: 1.2vmin 3vmin;
+    opacity: 0.55; cursor: pointer;
+  }
+  body[data-paused='true'] #pause-toggle {
+    color: var(--paused); border-color: var(--paused); opacity: 0.9;
+  }
+  body[data-mode='offline'] #pause-toggle { color: var(--offline); border-color: var(--offline); }
 
   #status { position: fixed; bottom: 2vmin; font-size: 2vmin; opacity: 0.6; }
 
@@ -194,6 +218,8 @@
     <div id="digits">--:--</div>
     <div id="session-title"></div>
     <div id="mode-label">IDLE</div>
+    <!-- D5: one-tap Pause flips the gateway to passthrough. No arming ritual. -->
+    <button id="pause-toggle" type="button">PAUSE</button>
   </section>
 
   <div id="status"></div>
@@ -243,6 +269,7 @@
   const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
   const tickerEl = document.getElementById('ticker')
+  const pauseToggle = document.getElementById('pause-toggle')
 
   const alertFlash = document.getElementById('alert-flash')
   const approval = document.getElementById('approval')
@@ -264,6 +291,11 @@
   function render() {
     const view = deckView(state, Date.now(), { connected })
     document.body.dataset.mode = view.mode
+    // D5/D14: the paused flag drives the purple accent through CSS; the control
+    // itself reports the inverse action. Both derive from the reducer view —
+    // nothing about pause is toggled imperatively on the DOM.
+    document.body.dataset.paused = view.paused ? 'true' : 'false'
+    pauseToggle.textContent = view.paused ? 'RESUME' : 'PAUSE'
     if (view.mode === 'offline') {
       digits.textContent = '--:--'
       sessionTitle.textContent = ''
@@ -343,6 +375,36 @@
     ticker = reduceTicker(ticker, { ...event, at: localEventTime(event, Date.now()) })
     renderTicker()
   }
+
+  // D5: interception mode flows through the same reducer as everything else —
+  // a mode frame carries only { paused }, so it overlays the accent without
+  // touching the session clock. Replayed on reconnect, so a blip stays truthful.
+  function onModeEvent(message) {
+    const event = JSON.parse(message.data)
+    state = reduceDeck(state, { type: 'mode', paused: event.paused })
+    render()
+  }
+
+  // The tap is fire-and-forget: the gateway answers with a mode event that the
+  // SSE stream echoes back, and that — not this POST — repaints the deck. One
+  // request in flight at a time so a double tap can't cancel its own flip.
+  let toggling = false
+  async function togglePause() {
+    if (deckToken === null || toggling) return
+    toggling = true
+    try {
+      await fetch('/api/pause', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + deckToken, 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    } catch {
+      // Gateway unreachable — the stream is already projecting OFFLINE; the
+      // mode is unchanged and the next tap retries.
+    }
+    toggling = false
+  }
+  pauseToggle.addEventListener('click', togglePause)
 
   // The approval takeover (D16): render the oldest pending prompt — FIFO, so
   // the terminal that's been blocked longest gets answered first. A prompt
@@ -466,7 +528,14 @@
       const response = await fetch('/api/deck-config', {
         headers: { Authorization: 'Bearer ' + token },
       })
-      if (response.ok) deckConfig = await response.json()
+      if (response.ok) {
+        deckConfig = await response.json()
+        // A hard reload starts from initialDeckState (unpaused) with no SSE
+        // replay; deck-config is where it learns it's already paused. A live
+        // mode event that raced ahead of this fetch just re-sets the same bit.
+        state = reduceDeck(state, { type: 'mode', paused: deckConfig.paused === true })
+        render()
+      }
       if (!deckConfig.vapidPublicKey) return
       if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
       const registration = await navigator.serviceWorker.register('/sw.js', { type: 'module' })
@@ -541,6 +610,7 @@
     source.addEventListener('tool', onToolEvent)
     source.addEventListener('permission', onPromptLifecycleEvent)
     source.addEventListener('permission-resolved', onPromptLifecycleEvent)
+    source.addEventListener('mode', onModeEvent)
   }
 
   // The OS releases the wake lock whenever the page hides; re-acquire on

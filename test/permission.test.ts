@@ -29,6 +29,13 @@ const resolvePrompt = (
     body: JSON.stringify({ action }),
   })
 
+const togglePause = (app: ReturnType<typeof buildApp>['app'], token = DECK_TOKEN) =>
+  app.request('/api/pause', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: '{}',
+  })
+
 const permissionPayload = (overrides: Record<string, unknown> = {}) => ({
   hook_event_name: 'PermissionRequest',
   session_id: 'sess-7',
@@ -356,5 +363,98 @@ describe('permission hold contract', () => {
     const frames = await deck.readUntil('event: permission-resolved')
     expect(frames).toContain('"outcome":"ask"')
     await deck.close()
+  })
+})
+
+describe('pause toggle (D5)', () => {
+  it('flips to passthrough on a deck tap and streams the mode to the deck', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    const response = await togglePause(app)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ paused: true })
+    const frames = await deck.readUntil('event: mode')
+    expect(frames).toContain('"paused":true')
+    await deck.close()
+  })
+
+  it('makes a held-eligible prompt fall back instantly while paused — the terminal dialog proceeds', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+    await togglePause(app)
+
+    // A deck is connected, so without pause this would hold; paused, it must
+    // answer immediately with the no-decision shape.
+    const response = await postPermission(app)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({})
+    await deck.close()
+  })
+
+  it('resumes interception on a second tap — the prompt holds for the deck again', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    expect(await (await togglePause(app)).json()).toEqual({ paused: true })
+    expect(await (await togglePause(app)).json()).toEqual({ paused: false })
+
+    const hookResponse = postPermission(app)
+    const promptId = /"promptId":"([^"]+)"/.exec(await deck.readUntil('event: permission'))![1]!
+    await resolvePrompt(app, promptId, 'allow')
+
+    expect(await (await hookResponse).json()).toEqual({
+      hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } },
+    })
+    await deck.close()
+  })
+
+  it('replays the mode change to a deck that reconnects after a blip — still paused', async () => {
+    const { app } = buildApp()
+    const first = await openDeck(app)
+    await togglePause(app)
+    await first.readUntil('event: mode')
+    await first.close()
+
+    // A real EventSource reconnect resends the last id it saw; the mode event
+    // sits after it in the ring buffer and replays. Id 0 is "everything since
+    // the start" — the whole buffer, which here is just the mode event.
+    const second = await app.request(`/api/stream?token=${DECK_TOKEN}`, {
+      headers: { 'Last-Event-ID': '0' },
+    })
+    const reader = second.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffered = ''
+    while (!buffered.includes('event: mode')) {
+      buffered += decoder.decode((await reader.read()).value)
+    }
+    expect(buffered).toContain('"paused":true')
+    await reader.cancel()
+  })
+
+  it('reports the current mode from deck-config so a hard reload starts with the right accent', async () => {
+    const { app } = buildApp()
+
+    const before = await app.request('/api/deck-config', {
+      headers: { Authorization: `Bearer ${DECK_TOKEN}` },
+    })
+    expect(((await before.json()) as { paused: boolean }).paused).toBe(false)
+
+    await togglePause(app)
+
+    const after = await app.request('/api/deck-config', {
+      headers: { Authorization: `Bearer ${DECK_TOKEN}` },
+    })
+    expect(((await after.json()) as { paused: boolean }).paused).toBe(true)
+  })
+
+  it('rejects the hook token on the pause route — pausing is a deck control', async () => {
+    const { app } = buildApp()
+
+    const response = await togglePause(app, HOOK_TOKEN)
+
+    expect(response.status).toBe(403)
   })
 })

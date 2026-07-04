@@ -61,7 +61,10 @@ describe('event ingest', () => {
     })
 
     expect(response.status).toBe(202)
-    expect(eventLog.history()[0]!.title.length).toBeLessThanOrEqual(120)
+    // A stop event carries a title; the union now also spans title-less mode
+    // events, so narrow before reaching for it.
+    const event = eventLog.history()[0]! as { title: string }
+    expect(event.title.length).toBeLessThanOrEqual(120)
   })
 
   it('rejects a payload without a valid Stop shape with 400', async () => {

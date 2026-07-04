@@ -6,6 +6,7 @@ import { requireScope, type AuthTokens } from './auth.ts'
 import { classifyBash } from './bash-classifier.ts'
 import type { EventLog } from './event-log.ts'
 import type { DeckEvent } from './events.ts'
+import { createPauseState } from './pause-state.ts'
 import { registerPermissionRoutes } from './permission-routes.ts'
 import { createPushRegistry, type PushSender, type PushSubscriptionJson } from './push-registry.ts'
 import { loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
@@ -118,6 +119,10 @@ export function createApp(config: AppConfig) {
   const sendPush = config.alerts?.sendPush
   const pushRegistry = sendPush === undefined ? undefined : createPushRegistry(sendPush)
 
+  // D5: the deck's one-tap Pause flips interception off; while paused, a held
+  // prompt falls back instantly to the terminal instead of rendering a card.
+  const pauseState = createPauseState()
+
   // The gateway mirrors the deck's state through the same pure reducer; when
   // the deck is dark, this is where the alert decision still gets made.
   let deckState = initialDeckState
@@ -184,6 +189,9 @@ export function createApp(config: AppConfig) {
     c.json({
       alertThresholdMs,
       vapidPublicKey: config.alerts?.vapidPublicKey ?? null,
+      // A hard reload starts from initialDeckState (unpaused) and gets no SSE
+      // replay without a Last-Event-ID; deck-config is where it learns the mode.
+      paused: pauseState.isPaused(),
     }),
   )
 
@@ -213,14 +221,24 @@ export function createApp(config: AppConfig) {
   // than locking out a reconnecting deck.
   const activeStreamClosers: Array<() => void> = []
 
-  // D3/D4: a permission prompt is held only while a deck stream is open to
-  // render it — otherwise holding just delays the terminal dialog.
+  // D3/D4/D5: a permission prompt is held only while a deck stream is open to
+  // render it and interception is on — otherwise holding just delays the
+  // terminal dialog.
   registerPermissionRoutes(app, {
     tokens,
     eventLog,
     pushRegistry,
     hasDeck: () => activeStreamClosers.length > 0,
+    isPaused: () => pauseState.isPaused(),
     timeoutMs: config.permissionTimeoutMs,
+  })
+
+  // A tap toggles interception and broadcasts the new mode through the log, so
+  // it streams live and replays to any deck that reconnects (D5/D14).
+  app.post('/api/pause', requireScope('deck', tokens), (c) => {
+    const paused = pauseState.toggle()
+    eventLog.publish({ type: 'mode', paused })
+    return c.json({ paused }, 200)
   })
 
   app.get('/api/stream', requireScope('deck', tokens), (c) =>

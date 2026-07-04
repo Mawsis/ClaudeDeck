@@ -21,9 +21,12 @@ export const DEFAULT_PERMISSION_TIMEOUT_MS = 540_000
 
 export function createPendingPromptStore(options: {
   hasDeck: () => boolean
+  /** D5: paused → passthrough. Absent means never paused (always intercept). */
+  isPaused?: () => boolean
   timeoutMs?: number
 }): PendingPromptStore {
   const timeoutMs = options.timeoutMs ?? DEFAULT_PERMISSION_TIMEOUT_MS
+  const isPaused = options.isPaused ?? (() => false)
   const pending = new Map<string, (decision: PermissionDecision | null) => void>()
 
   const settle = (id: string, decision: PermissionDecision | null): boolean => {
@@ -37,9 +40,10 @@ export function createPendingPromptStore(options: {
   return {
     hold() {
       const id = crypto.randomUUID()
-      // D4: with no deck to render the card, holding would only delay the
-      // terminal dialog — fall back before the prompt is ever pending.
-      if (!options.hasDeck()) {
+      // Fall back before the prompt is ever pending when there is nothing to
+      // hold *for*: no deck to render the card (D4), or the deck flipped to
+      // passthrough (D5) — both mean "let the terminal dialog proceed now".
+      if (!options.hasDeck() || isPaused()) {
         return { id, decision: Promise.resolve(null), pending: false }
       }
       const decision = new Promise<PermissionDecision | null>((resolver) => {

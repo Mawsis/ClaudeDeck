@@ -1,6 +1,12 @@
 import type { BashCategory, BashRisk } from './bash-classifier.ts'
 
-export type DeckEventType = 'prompt' | 'stop' | 'tool' | 'permission' | 'permission-resolved'
+export type DeckEventType =
+  | 'prompt'
+  | 'stop'
+  | 'tool'
+  | 'permission'
+  | 'permission-resolved'
+  | 'mode'
 
 export type TickerCategory = BashCategory | 'edit'
 
@@ -53,11 +59,19 @@ export type PermissionResolvedEventInput = {
   readonly outcome: PermissionOutcome
 }
 
+/** D5: the gateway's interception mode, broadcast so a reconnecting deck
+ * reloads with the right accent. Global — it carries no session. */
+export type ModeEventInput = {
+  readonly type: 'mode'
+  readonly paused: boolean
+}
+
 export type DeckEventInput =
   | LifecycleEventInput
   | ToolEventInput
   | PermissionEventInput
   | PermissionResolvedEventInput
+  | ModeEventInput
 
 export type DeckEvent = DeckEventInput & {
   readonly id: number

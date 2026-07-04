@@ -141,7 +141,11 @@ describe('deck config endpoint', () => {
     })
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ alertThresholdMs: 30_000, vapidPublicKey: 'vapid-pub' })
+    expect(await response.json()).toEqual({
+      alertThresholdMs: 30_000,
+      vapidPublicKey: 'vapid-pub',
+      paused: false,
+    })
   })
 
   it('reports push unavailable with a null key, and defaults the threshold to 45s', async () => {
@@ -151,7 +155,11 @@ describe('deck config endpoint', () => {
       headers: { Authorization: `Bearer ${DECK_TOKEN}` },
     })
 
-    expect(await response.json()).toEqual({ alertThresholdMs: 45_000, vapidPublicKey: null })
+    expect(await response.json()).toEqual({
+      alertThresholdMs: 45_000,
+      vapidPublicKey: null,
+      paused: false,
+    })
   })
 
   it('is deck-scoped — the hook token is refused', async () => {

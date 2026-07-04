@@ -159,6 +159,27 @@ describe('PWA shell', () => {
     expect(sw).toContain('PERMISSION')
   })
 
+  it('exposes a one-tap Pause (D5): posts to /api/pause, listens for mode events, paints the paused accent from the reducer view', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // A single control, deck-scoped POST — no arming ritual.
+    expect(html).toContain('id="pause-toggle"')
+    expect(html).toContain('/api/pause')
+    // The mode change streams back as its own event and flows through the same
+    // pure-reducer path as everything else.
+    expect(html).toContain("addEventListener('mode'")
+    expect(html).toContain('reduceDeck')
+    // D14: the purple paused accent is a data attribute the CSS keys on, driven
+    // by the reducer view's paused flag — not toggled imperatively.
+    expect(html).toContain('view.paused')
+    expect(html).toContain('data-paused')
+    expect(html).toMatch(/--paused:\s*#a855f7/)
+    // A hard reload learns the current mode from deck-config, not just live SSE.
+    expect(html).toContain('deckConfig.paused')
+  })
+
   it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {
     const { app } = buildApp()
 

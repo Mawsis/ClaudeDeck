@@ -86,4 +86,26 @@ describe('pending-prompt store', () => {
 
     expect(store.resolve('no-such-prompt', { behavior: 'allow' })).toBe(false)
   })
+
+  it('falls back immediately with no decision while paused — D5 passthrough is an instant ask', async () => {
+    const store = createPendingPromptStore({ hasDeck: () => true, isPaused: () => true })
+
+    const held = store.hold()
+
+    await expect(held.decision).resolves.toBeNull()
+    // Never pending: no card renders and nothing alerts, exactly like no-deck.
+    expect(held.pending).toBe(false)
+  })
+
+  it('holds again the moment the mode flips back to intercept — the predicate is read per hold', async () => {
+    let paused = true
+    const store = createPendingPromptStore({ hasDeck: () => true, isPaused: () => paused })
+
+    expect(store.hold().pending).toBe(false)
+
+    paused = false
+    const held = store.hold()
+    expect(held.pending).toBe(true)
+    store.resolve(held.id, null)
+  })
 })

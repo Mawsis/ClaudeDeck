@@ -138,6 +138,75 @@ describe('deck reducer', () => {
 
     expect(deckView(state, 10_000)).toEqual({ mode: 'done', title: 'my-app', elapsedMs: null })
   })
+
+  it('flags paused after a pause mode event without stopping the session clock underneath', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+    const paused = reduceDeck(running, { type: 'mode', paused: true, at: 20_000 })
+
+    // D5: pausing flips interception, not the timer — the clock keeps counting.
+    // D14: purple paused accent overlays whatever session is active.
+    expect(deckView(paused, 70_000)).toEqual({
+      mode: 'running',
+      title: 'my-app',
+      elapsedMs: 60_000,
+      paused: true,
+    })
+  })
+
+  it('does not flag paused while intercepting — the default view carries no paused key', () => {
+    const running = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+
+    expect(deckView(running, 70_000)).toEqual({
+      mode: 'running',
+      title: 'my-app',
+      elapsedMs: 60_000,
+    })
+  })
+
+  it('clears the paused flag when the mode flips back to intercept', () => {
+    let state = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+    state = reduceDeck(state, { type: 'mode', paused: true, at: 20_000 })
+    state = reduceDeck(state, { type: 'mode', paused: false, at: 30_000 })
+
+    expect(deckView(state, 70_000)).toEqual({
+      mode: 'running',
+      title: 'my-app',
+      elapsedMs: 60_000,
+    })
+  })
+
+  it('lets offline win over paused — a stale clock is a worse lie than a stale accent', () => {
+    let state = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 's1',
+      title: 'my-app',
+      at: 10_000,
+    })
+    state = reduceDeck(state, { type: 'mode', paused: true, at: 20_000 })
+
+    expect(deckView(state, 70_000, { connected: false })).toEqual({ mode: 'offline' })
+  })
+
+  it('flags paused even while idle — the mode is set before any session runs', () => {
+    const paused = reduceDeck(initialDeckState, { type: 'mode', paused: true, at: 5_000 })
+
+    expect(deckView(paused, 10_000)).toEqual({ mode: 'idle', paused: true })
+  })
 })
 
 describe('completion alerts', () => {
