@@ -4,6 +4,10 @@ export type HttpHook = {
   readonly type: 'http'
   readonly url: string
   readonly headers: { readonly Authorization: string }
+  /** Per-hook interpolation gate: without it, `$VAR` in headers resolves to
+   * an empty string. A top-level settings key is silently ignored (verified
+   * against a real claude binary, 2026-07-03). */
+  readonly allowedEnvVars: readonly string[]
 }
 
 export type HookMatcher = { readonly matcher?: string; readonly hooks: readonly HttpHook[] }
@@ -14,8 +18,10 @@ export type HookSettings = {
     readonly UserPromptSubmit: readonly HookMatcher[]
     readonly PostToolUse: readonly HookMatcher[]
     readonly PermissionRequest: readonly HookMatcher[]
+    /** Present only when the AskUserQuestion hack is opted into — the flag
+     * must disable it independently of everything else (issue #11). */
+    readonly PreToolUse?: readonly HookMatcher[]
   }
-  readonly allowedEnvVars: readonly string[]
 }
 
 /**
@@ -46,7 +52,12 @@ function normalizeGatewayUrl(raw: string): string {
  * the `$VAR` interpolation form, resolved by Claude Code at hook time and
  * gated by `allowedEnvVars`.
  */
-export function generateHookSettings(options: { gatewayUrl: string }): HookSettings {
+export function generateHookSettings(options: {
+  gatewayUrl: string
+  /** D3's AskUserQuestion hack — undocumented behavior, so it stays opt-in
+   * and matcher-isolated to AskUserQuestion alone. */
+  interceptQuestions?: boolean
+}): HookSettings {
   const base = normalizeGatewayUrl(options.gatewayUrl)
 
   const httpHook = (path: string): HookMatcher => ({
@@ -55,6 +66,7 @@ export function generateHookSettings(options: { gatewayUrl: string }): HookSetti
         type: 'http',
         url: `${base}${path}`,
         headers: { Authorization: `Bearer $${HOOK_TOKEN_ENV_VAR}` },
+        allowedEnvVars: [HOOK_TOKEN_ENV_VAR],
       },
     ],
   })
@@ -66,7 +78,9 @@ export function generateHookSettings(options: { gatewayUrl: string }): HookSetti
       UserPromptSubmit: [ingestMatcher],
       PostToolUse: [{ matcher: TICKER_TOOL_MATCHER, ...ingestMatcher }],
       PermissionRequest: [httpHook('/api/permission')],
+      ...(options.interceptQuestions === true
+        ? { PreToolUse: [{ matcher: 'AskUserQuestion', ...httpHook('/api/question') }] }
+        : {}),
     },
-    allowedEnvVars: [HOOK_TOKEN_ENV_VAR],
   }
 }

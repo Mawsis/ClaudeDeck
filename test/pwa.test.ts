@@ -120,6 +120,25 @@ describe('PWA shell', () => {
     expect(html).toContain('sessionId')
   })
 
+  it('renders a question card on the same takeover: choices as tap targets, ask-in-terminal escape, answers over plain HTTP', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // Questions flow through the same queue reducer as permission cards.
+    expect(html).toContain("addEventListener('question'")
+    expect(html).toContain("addEventListener('question-resolved'")
+    // The card branches on kind — a question shows choice buttons, not the
+    // hold-to-Allow rail.
+    expect(html).toContain("kind === 'question'")
+    expect(html).toContain('id="question-options"')
+    // Each tapped choice answers over plain HTTP (D8); ask stays an escape.
+    expect(html).toContain('/answer')
+    expect(html).toContain('ask: true')
+    // Choice labels are untrusted input — textContent only.
+    expect(html).not.toContain('innerHTML')
+  })
+
   it('recovers from a rejected token: a definitive 401/403 clears the saved token and re-shows the form', async () => {
     const { app } = buildApp()
 

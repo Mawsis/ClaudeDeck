@@ -184,37 +184,59 @@ export function reduceTicker(ticker, event) {
 }
 
 /**
- * @typedef {{ promptId: string, sessionId: string, title: string, tool: string, detail: string,
- *   risk: 'high' | 'routine' }} PendingPrompt
+ * @typedef {{ kind: 'permission', promptId: string, sessionId: string, title: string,
+ *   tool: string, detail: string, risk: 'high' | 'routine' }} PermissionCard
+ * @typedef {{ kind: 'question', promptId: string, sessionId: string, title: string,
+ *   question: string, options: readonly string[] }} QuestionCard
+ * @typedef {PermissionCard | QuestionCard} PendingPrompt
  */
 
 /** @type {readonly PendingPrompt[]} */
 export const initialPrompts = Object.freeze([])
 
 /**
- * Pending approval cards, oldest first — the deck renders prompts[0].
+ * Pending takeover cards — permission approvals and AskUserQuestion choices —
+ * oldest first in one FIFO queue; the deck renders prompts[0].
  *
  * @param {readonly PendingPrompt[]} prompts
- * @param {{ type: string, promptId?: string, sessionId?: string, title?: string, tool?: string,
- *   detail?: string, risk?: string, outcome?: string }} event a deck SSE frame — external JSON, so fields are
- *   normalized, not trusted.
+ * @param {{ type: string, id?: number, at?: number, promptId?: string, sessionId?: string,
+ *   title?: string, tool?: string, detail?: string, risk?: string, outcome?: string,
+ *   question?: string, options?: readonly unknown[] }} event a deck SSE frame — external
+ *   JSON, so fields are normalized, not trusted.
  * @returns {readonly PendingPrompt[]}
  */
 export function reducePrompts(prompts, event) {
-  if (event.type === 'permission-resolved') {
+  if (event.type === 'permission-resolved' || event.type === 'question-resolved') {
     return prompts.filter((prompt) => prompt.promptId !== event.promptId)
   }
-  if (event.type !== 'permission') return prompts
+  if (event.type !== 'permission' && event.type !== 'question') return prompts
   // Reconnect replay is at-least-once; a redelivered prompt is the same card.
   // promptIds are unique per gateway process, and the ring buffer (like every
   // pending prompt) dies with it — cross-restart collisions can't replay.
   if (prompts.some((prompt) => prompt.promptId === event.promptId)) return prompts
+  const base = {
+    promptId: String(event.promptId ?? ''),
+    sessionId: String(event.sessionId ?? ''),
+    title: String(event.title ?? ''),
+  }
+  if (event.type === 'question') {
+    return [
+      ...prompts,
+      {
+        kind: /** @type {const} */ ('question'),
+        ...base,
+        question: String(event.question ?? ''),
+        options: (Array.isArray(event.options) ? event.options : []).map((option) =>
+          String(option ?? ''),
+        ),
+      },
+    ]
+  }
   return [
     ...prompts,
     {
-      promptId: String(event.promptId ?? ''),
-      sessionId: String(event.sessionId ?? ''),
-      title: String(event.title ?? ''),
+      kind: /** @type {const} */ ('permission'),
+      ...base,
       tool: String(event.tool ?? ''),
       detail: String(event.detail ?? ''),
       // Only the exact D15 marker stretches the hold; anything else — absent,

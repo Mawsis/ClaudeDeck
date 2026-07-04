@@ -47,6 +47,29 @@ reconnect) and is reported by `/api/deck-config`, so a reloaded deck comes back
 with the right accent; the deck tints purple while paused (D14). Tapping again
 resumes interception.
 
+**Answer Claude's questions remotely** (opt-in): with `--intercept-questions`,
+the config generator additionally registers a `PreToolUse` http hook matched to
+`AskUserQuestion` alone. The gateway holds the call, the deck renders the
+question with one tap-target per choice (plus an Ask-in-terminal escape), and
+the tapped choice returns as `permissionDecision: "deny"` with reason
+`User selected: <choice>` — which Claude reads as the answer. Every fallback
+(no deck, pause, 540s silence, unrecognized payload shape) returns
+`permissionDecision: "ask"` so the question renders in the terminal normally.
+This rides on **undocumented behavior**, so it ships behind its own flag and
+hook matcher, and occasional terminal re-asks are expected, not bugs.
+
+Because the mechanism is undocumented, a **canary test** drives a real Claude
+Code session end-to-end (deck taps a choice → session proceeds with it). Run it
+on demand — especially after upgrading Claude Code:
+
+```bash
+npm run canary    # needs working Claude Code credentials; consumes tokens
+```
+
+A failure where the session ignores the deny reason (the canary's `canUseTool`
+detector fires) means the hack broke in a Claude Code update — disable
+`--intercept-questions` until it's revalidated.
+
 ## Develop
 
 ```bash
@@ -72,6 +95,7 @@ in memory — restarting loses only event history.
 
 ```bash
 npm run generate-config -- --gateway-url https://your-deck-domain
+# add --intercept-questions to opt into the AskUserQuestion hack
 ```
 
 Merge the printed JSON into `~/.claude/settings.json`, export

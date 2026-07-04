@@ -8,6 +8,7 @@ import type { EventLog } from './event-log.ts'
 import type { DeckEvent } from './events.ts'
 import { createPauseState } from './pause-state.ts'
 import { registerPermissionRoutes } from './permission-routes.ts'
+import { registerQuestionRoutes } from './question-routes.ts'
 import { createPushRegistry, type PushSender, type PushSubscriptionJson } from './push-registry.ts'
 import { loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
 import { clampDetail, extractToolDetail } from './tool-detail.ts'
@@ -228,6 +229,17 @@ export function createApp(config: AppConfig) {
     tokens,
     eventLog,
     pushRegistry,
+    hasDeck: () => activeStreamClosers.length > 0,
+    isPaused: () => pauseState.isPaused(),
+    timeoutMs: config.permissionTimeoutMs,
+  })
+
+  // The AskUserQuestion hack shares the permission gate's hold policy (D3/D4):
+  // the route always exists — the opt-in feature flag lives in the generated
+  // hook config, so an un-flagged workstation simply never calls it.
+  registerQuestionRoutes(app, {
+    tokens,
+    eventLog,
     hasDeck: () => activeStreamClosers.length > 0,
     isPaused: () => pauseState.isPaused(),
     timeoutMs: config.permissionTimeoutMs,

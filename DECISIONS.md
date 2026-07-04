@@ -9,7 +9,9 @@ match the documented behavior (see "Spec corrections" below).
 
 - `http` hook handlers exist: `{ "type": "http", "url": ... }`, POST-only, JSON body identical
   to command-hook stdin. Supported fields: `headers` (with `$VAR` interpolation gated by
-  `allowedEnvVars`), `timeout`.
+  `allowedEnvVars`), `timeout`. **Correction (verified against claude 2.1.199, 2026-07-03):**
+  `allowedEnvVars` is a field on each http hook object, not a top-level settings key — a
+  top-level key is silently ignored and `$VAR` headers interpolate to empty strings.
 - Blocking decisions require a **2xx response** with decision JSON. Non-2xx or timeout is a
   **non-blocking error and execution continues** — a dead gateway degrades to normal
   terminal prompting automatically.

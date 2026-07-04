@@ -6,6 +6,8 @@ export type DeckEventType =
   | 'tool'
   | 'permission'
   | 'permission-resolved'
+  | 'question'
+  | 'question-resolved'
   | 'mode'
 
 export type TickerCategory = BashCategory | 'edit'
@@ -59,6 +61,31 @@ export type PermissionResolvedEventInput = {
   readonly outcome: PermissionOutcome
 }
 
+/** A held AskUserQuestion awaiting the deck's tap — one card, tappable
+ * choices (D3's flagged hack). */
+export type QuestionEventInput = {
+  readonly type: 'question'
+  readonly sessionId: string
+  readonly title: string
+  readonly cwd: string
+  readonly promptId: string
+  readonly question: string
+  readonly options: readonly string[]
+}
+
+/** How a held question settled; `ask` covers every no-answer path (timeout,
+ * no-deck, pause, explicit ask-in-terminal) — the terminal re-asks. */
+export type QuestionOutcome = 'answered' | 'ask'
+
+export type QuestionResolvedEventInput = {
+  readonly type: 'question-resolved'
+  readonly sessionId: string
+  readonly title: string
+  readonly cwd: string
+  readonly promptId: string
+  readonly outcome: QuestionOutcome
+}
+
 /** D5: the gateway's interception mode, broadcast so a reconnecting deck
  * reloads with the right accent. Global — it carries no session. */
 export type ModeEventInput = {
@@ -71,6 +98,8 @@ export type DeckEventInput =
   | ToolEventInput
   | PermissionEventInput
   | PermissionResolvedEventInput
+  | QuestionEventInput
+  | QuestionResolvedEventInput
   | ModeEventInput
 
 export type DeckEvent = DeckEventInput & {

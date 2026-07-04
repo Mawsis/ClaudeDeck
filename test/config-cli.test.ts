@@ -7,9 +7,20 @@ describe('config generator CLI', () => {
 
     const parsed = JSON.parse(output)
     expect(parsed.hooks.Stop[0].hooks[0].url).toBe('https://deck.example.com/api/events')
-    expect(parsed.allowedEnvVars).toEqual(['CLAUDEDECK_HOOK_TOKEN'])
+    expect(parsed.hooks.Stop[0].hooks[0].allowedEnvVars).toEqual(['CLAUDEDECK_HOOK_TOKEN'])
     expect(output).not.toContain('Bearer sk')
     expect(output).toContain('$CLAUDEDECK_HOOK_TOKEN')
+  })
+
+  it('omits PreToolUse without the flag and registers it with --intercept-questions', () => {
+    const withoutFlag = JSON.parse(renderCliOutput(['--gateway-url', 'https://deck.example.com']))
+    expect(withoutFlag.hooks).not.toHaveProperty('PreToolUse')
+
+    const withFlag = JSON.parse(
+      renderCliOutput(['--gateway-url', 'https://deck.example.com', '--intercept-questions']),
+    )
+    expect(withFlag.hooks.PreToolUse[0].matcher).toBe('AskUserQuestion')
+    expect(withFlag.hooks.PreToolUse[0].hooks[0].url).toBe('https://deck.example.com/api/question')
   })
 
   it('fails with a usage message when --gateway-url is missing', () => {

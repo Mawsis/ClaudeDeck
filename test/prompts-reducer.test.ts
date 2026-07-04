@@ -20,6 +20,7 @@ describe('prompts reducer', () => {
     expect(initialPrompts).toEqual([])
     expect(prompts).toEqual([
       {
+        kind: 'permission',
         promptId: 'p-1',
         sessionId: 's1',
         title: 'my-app',
@@ -40,8 +41,8 @@ describe('prompts reducer', () => {
     const absent = reducePrompts(initialPrompts, permissionEvent('p-1'))
     const junk = reducePrompts(initialPrompts, permissionEvent('p-2', { risk: 'extreme' }))
 
-    expect(absent[0]!.risk).toBe('routine')
-    expect(junk[0]!.risk).toBe('routine')
+    expect(absent[0]).toMatchObject({ risk: 'routine' })
+    expect(junk[0]).toMatchObject({ risk: 'routine' })
   })
 
   it('drops the settled card on permission-resolved, keeping the rest of the queue', () => {
@@ -104,6 +105,58 @@ describe('prompts reducer', () => {
     }
 
     expect(prompts.map((prompt) => prompt.promptId)).toEqual(['p-1', 'p-2', 'p-3'])
+  })
+
+  it('holds an arriving question as a card with tappable options, in the same FIFO queue', () => {
+    let prompts = reducePrompts(initialPrompts, permissionEvent('p-1'))
+    prompts = reducePrompts(prompts, {
+      type: 'question',
+      id: 11,
+      sessionId: 's1',
+      title: 'my-app',
+      promptId: 'q-1',
+      question: 'Which auth method?',
+      options: ['OAuth', 'API key'],
+      at: 11_000,
+    })
+
+    expect(prompts.map((prompt) => prompt.promptId)).toEqual(['p-1', 'q-1'])
+    expect(prompts[0]!.kind).toBe('permission')
+    expect(prompts[1]).toMatchObject({
+      kind: 'question',
+      question: 'Which auth method?',
+      options: ['OAuth', 'API key'],
+    })
+  })
+
+  it('drops the settled question card on question-resolved and ignores duplicates', () => {
+    const question = {
+      type: 'question',
+      id: 11,
+      sessionId: 's1',
+      title: 'my-app',
+      promptId: 'q-1',
+      question: 'Which auth method?',
+      options: ['OAuth', 'API key'],
+      at: 11_000,
+    }
+    const once = reducePrompts(initialPrompts, question)
+    // Reconnect replay is at-least-once; a redelivered question is the same card.
+    expect(reducePrompts(once, question)).toBe(once)
+
+    const after = reducePrompts(once, { type: 'question-resolved', promptId: 'q-1', outcome: 'answered' })
+    expect(after).toEqual([])
+  })
+
+  it('normalizes junk option entries to strings — external JSON never renders as objects', () => {
+    const prompts = reducePrompts(initialPrompts, {
+      type: 'question',
+      promptId: 'q-1',
+      question: 'Pick one',
+      options: ['OK', 42, null],
+    })
+
+    expect(prompts[0]).toMatchObject({ options: ['OK', '42', ''] })
   })
 
   // The takeover already IS the first prompt; the badge answers "what's

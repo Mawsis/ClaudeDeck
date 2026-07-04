@@ -1,7 +1,8 @@
 import { pathToFileURL } from 'node:url'
 import { generateHookSettings } from './generate.ts'
 
-const USAGE = 'usage: npm run generate-config -- --gateway-url https://your-deck-host'
+const USAGE =
+  'usage: npm run generate-config -- --gateway-url https://your-deck-host [--intercept-questions]'
 
 export function renderCliOutput(argv: readonly string[]): string {
   const flagIndex = argv.indexOf('--gateway-url')
@@ -9,7 +10,8 @@ export function renderCliOutput(argv: readonly string[]): string {
   if (gatewayUrl === undefined || gatewayUrl.startsWith('--')) {
     throw new Error(USAGE)
   }
-  return JSON.stringify(generateHookSettings({ gatewayUrl }), null, 2)
+  const interceptQuestions = argv.includes('--intercept-questions')
+  return JSON.stringify(generateHookSettings({ gatewayUrl, interceptQuestions }), null, 2)
 }
 
 const invokedDirectly = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href

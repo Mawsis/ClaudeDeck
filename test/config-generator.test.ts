@@ -12,12 +12,31 @@ describe('config generator', () => {
     expect(hook.url).toBe('https://deck.example.com/api/events')
   })
 
-  it('sends the workstation secret only as env-var interpolation gated by allowedEnvVars', () => {
+  it('sends the workstation secret only as env-var interpolation gated per-hook by allowedEnvVars', () => {
     const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com' })
 
+    // allowedEnvVars is a field on each http hook object — a top-level
+    // settings key is silently ignored and the header interpolates to
+    // "Bearer " (verified against a real claude binary, 2026-07-03).
     const hook = settings.hooks.Stop[0]!.hooks[0]!
     expect(hook.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
-    expect(settings.allowedEnvVars).toContain('CLAUDEDECK_HOOK_TOKEN')
+    expect(hook.allowedEnvVars).toEqual(['CLAUDEDECK_HOOK_TOKEN'])
+    expect(settings).not.toHaveProperty('allowedEnvVars')
+  })
+
+  it('gates interpolation on every registered hook, not just Stop', () => {
+    const settings = generateHookSettings({
+      gatewayUrl: 'https://deck.example.com',
+      interceptQuestions: true,
+    })
+
+    const allHooks = Object.values(settings.hooks).flatMap((matchers) =>
+      matchers.flatMap((matcher) => matcher.hooks),
+    )
+    expect(allHooks.length).toBeGreaterThanOrEqual(5)
+    for (const hook of allHooks) {
+      expect(hook.allowedEnvVars).toEqual(['CLAUDEDECK_HOOK_TOKEN'])
+    }
   })
 
   it('registers a UserPromptSubmit http hook with the same ingest url and env-var auth header', () => {
@@ -62,6 +81,29 @@ describe('config generator', () => {
     expect(hook.type).toBe('http')
     expect(hook.url).toBe('https://deck.example.com/api/permission')
     expect(hook.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
+  })
+
+  it('registers no PreToolUse hook by default — the AskUserQuestion hack is opt-in', () => {
+    const settings = generateHookSettings({ gatewayUrl: 'https://deck.example.com' })
+
+    expect(settings.hooks).not.toHaveProperty('PreToolUse')
+  })
+
+  it('with interceptQuestions, registers a PreToolUse http hook matched to AskUserQuestion only', () => {
+    const settings = generateHookSettings({
+      gatewayUrl: 'https://deck.example.com',
+      interceptQuestions: true,
+    })
+
+    const preToolUseMatchers = settings.hooks.PreToolUse
+    expect(preToolUseMatchers).toHaveLength(1)
+    const { matcher, hooks } = preToolUseMatchers![0]!
+    // The hack rides on undocumented behavior (D3): its matcher must never
+    // widen beyond AskUserQuestion, or every tool call would pay the price.
+    expect(matcher).toBe('AskUserQuestion')
+    expect(hooks[0]!.type).toBe('http')
+    expect(hooks[0]!.url).toBe('https://deck.example.com/api/question')
+    expect(hooks[0]!.headers.Authorization).toBe('Bearer $CLAUDEDECK_HOOK_TOKEN')
   })
 
   it('normalizes a trailing slash on the gateway url', () => {

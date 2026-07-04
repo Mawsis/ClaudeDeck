@@ -181,6 +181,15 @@
     white-space: pre-wrap; word-break: break-all;
     border: 2px solid var(--dim); padding: 2vmin;
   }
+  /* Question cards: choices stack full-width — each is a single tap, big
+     enough for a docked-arm's-length finger. Ask-in-terminal stays the dim
+     escape hatch, visually apart from the choices. */
+  #question-options { display: flex; flex-direction: column; gap: 2vmin; }
+  #question-options button {
+    font-size: 2.2vmin; padding: 2.5vmin 1vmin;
+    background: var(--bg); color: var(--prompt); border-color: var(--prompt);
+  }
+  #question-options #question-ask { color: var(--dim); border-color: var(--dim); }
   /* D16: side-by-side actions. D15: Deny and Ask are single taps; Allow only
      fires after a completed hold, so accidental contact with a desk-exposed
      screen can only produce safe outcomes. */
@@ -244,6 +253,10 @@
   </div>
   <div id="approval-session"></div>
   <pre id="approval-payload"></pre>
+  <!-- Question cards (D3's flagged AskUserQuestion hack): one button per
+       choice replaces the Allow/Deny rail — answering is a single tap
+       because nothing destructive rides on it. -->
+  <div id="question-options" class="hidden"></div>
   <div id="approval-actions">
     <button id="approve-deny" type="button">DENY</button>
     <button id="approve-ask" type="button">ASK IN TERMINAL</button>
@@ -289,6 +302,8 @@
   const approvalTool = document.getElementById('approval-tool')
   const approvalSession = document.getElementById('approval-session')
   const approvalPayload = document.getElementById('approval-payload')
+  const questionOptions = document.getElementById('question-options')
+  const approvalActions = document.getElementById('approval-actions')
   const queueBadgeEl = document.getElementById('queue-badge')
 
   let state = initialDeckState
@@ -435,14 +450,38 @@
       return
     }
     approval.classList.remove('hidden')
-    approvalTool.textContent = '▲ ' + current.tool
+    const isQuestion = current.kind === 'question'
+    approvalTool.textContent = isQuestion ? '? QUESTION' : '▲ ' + current.tool
     // The session label tells two prompts from one project apart; the badge
     // says how many more wait behind this card (empty once the queue drains).
     approvalSession.textContent =
       current.title + (current.sessionId ? ' · ' + current.sessionId.slice(0, 8) : '')
     queueBadgeEl.textContent = queueBadge(prompts)
-    // Command text is untrusted input — textContent only, never markup.
-    approvalPayload.textContent = current.detail
+    // Question and command text are untrusted input — textContent only, never markup.
+    approvalPayload.textContent = isQuestion ? current.question : current.detail
+    // The two card kinds swap their action rails: choices for a question,
+    // hold-to-Allow / Deny / Ask for a permission.
+    approvalActions.classList.toggle('hidden', isQuestion)
+    questionOptions.classList.toggle('hidden', !isQuestion)
+    if (isQuestion) {
+      questionOptions.replaceChildren(
+        ...current.options.map((choice) => {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.textContent = choice
+          button.addEventListener('click', () => answerCurrentQuestion({ choice }))
+          return button
+        }),
+        (() => {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.id = 'question-ask'
+          button.textContent = 'ASK IN TERMINAL'
+          button.addEventListener('click', () => answerCurrentQuestion({ ask: true }))
+          return button
+        })(),
+      )
+    }
     if (current.promptId !== shownPromptId) {
       shownPromptId = current.promptId
       // A hold begun on the previous card must not keep charging over this
@@ -482,6 +521,32 @@
     // Drop the card locally on any completed round trip: 200 settled it here,
     // 404 means it settled elsewhere — either way it is no longer pending.
     prompts = reducePrompts(prompts, { type: 'permission-resolved', promptId: current.promptId })
+    renderApproval()
+  }
+
+  // A tapped choice answers the held question; ask-in-terminal sends it back
+  // to the terminal. Shares the single-resolution-in-flight guard — a double
+  // tap must not answer the next card with this card's intent.
+  async function answerCurrentQuestion(body) {
+    const current = prompts[0]
+    if (current === undefined || current.kind !== 'question' || resolving) return
+    resolving = true
+    try {
+      await fetch('/api/questions/' + encodeURIComponent(current.promptId) + '/answer', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + deckToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    } catch {
+      // Network hiccup: leave the card up — the gateway's question-resolved
+      // event (or the 540s fallback) is the truth about whether it settled.
+      resolving = false
+      return
+    }
+    resolving = false
+    // Drop the card locally on any completed round trip: 200 settled it here,
+    // 404 means it settled elsewhere — either way it is no longer pending.
+    prompts = reducePrompts(prompts, { type: 'question-resolved', promptId: current.promptId })
     renderApproval()
   }
 
@@ -628,6 +693,8 @@
     source.addEventListener('tool', onToolEvent)
     source.addEventListener('permission', onPromptLifecycleEvent)
     source.addEventListener('permission-resolved', onPromptLifecycleEvent)
+    source.addEventListener('question', onPromptLifecycleEvent)
+    source.addEventListener('question-resolved', onPromptLifecycleEvent)
     source.addEventListener('mode', onModeEvent)
   }
 
