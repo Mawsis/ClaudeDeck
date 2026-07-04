@@ -9,7 +9,7 @@
  * @typedef {{ status: 'done', title: string, elapsedMs: number | null }} DoneSession
  * @typedef {RunningSession | DoneSession} SessionState
  * @typedef {{ activeSessionId: string | null, sessions: Readonly<Record<string, SessionState>>,
- *   paused: boolean }} DeckState
+ *   paused: boolean, seenSession: boolean }} DeckState
  * @typedef {{ mode: 'idle' }
  *   | { mode: 'running', title: string, elapsedMs: number }
  *   | { mode: 'done', title: string, elapsedMs: number | null }
@@ -22,6 +22,7 @@ export const initialDeckState = Object.freeze({
   activeSessionId: null,
   sessions: Object.freeze({}),
   paused: false,
+  seenSession: false,
 })
 
 /**
@@ -64,7 +65,22 @@ export function reduceDeck(state, event) {
     ...state,
     activeSessionId: event.sessionId,
     sessions: { ...state.sessions, [event.sessionId]: session },
+    // Any prompt or stop proves the pipeline has carried a real session —
+    // the one-way latch behind the first-run hint.
+    seenSession: true,
   }
+}
+
+/**
+ * The one-time first-run hint: shown only while the event log has never
+ * contained a session event. Mode events don't count — pausing an empty deck
+ * proves nothing about the hook pipeline.
+ *
+ * @param {DeckState} state
+ * @returns {boolean}
+ */
+export function firstRunHint(state) {
+  return !state.seenSession
 }
 
 /**
@@ -87,6 +103,30 @@ export function deckView(state, now, { connected = true } = {}) {
     return { mode: 'running', title: active.title, elapsedMs: now - active.since, ...paused }
   }
   return { mode: 'done', title: active.title, elapsedMs: active.elapsedMs, ...paused }
+}
+
+/**
+ * How many sessions have a prompt submitted and no stop yet. Idle-but-alive
+ * sessions never emitted an event, so they are absent from the map entirely.
+ *
+ * @param {DeckState} state
+ * @returns {number}
+ */
+export function runningSessionCount(state) {
+  return Object.values(state.sessions).filter((session) => session.status === 'running').length
+}
+
+/**
+ * The clock's ambient honesty: a dim `×N` next to the session label whenever
+ * other work runs behind the shown session. Empty at zero so the chrome
+ * collapses to nothing — no ghost badge on a quiet deck.
+ *
+ * @param {DeckState} state
+ * @returns {string}
+ */
+export function runningCountBadge(state) {
+  const count = runningSessionCount(state)
+  return count > 0 ? `×${count}` : ''
 }
 
 /** D11: short conversational turns stay silent — only real work alerts. */

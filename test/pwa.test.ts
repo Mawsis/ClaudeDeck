@@ -122,6 +122,32 @@ describe('PWA shell', () => {
     expect(html).not.toContain('innerHTML')
   })
 
+  it('renders ambient honesty: a reducer-derived running count beside the session label, collapsed at zero', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The count is the reducer's word — the page only projects the badge.
+    expect(html).toContain('runningCountBadge(state)')
+    expect(html).toContain('id="session-count"')
+    // Hidden entirely at zero: the empty badge collapses to nothing.
+    expect(html).toContain('#session-count:empty')
+  })
+
+  it('shows the one-time first-run hint until the first session event ever, then never again', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    expect(html).toContain('id="first-run-hint"')
+    expect(html).toContain('waiting for first session — run claude in any project')
+    // The reducer decides whether this log has ever seen a session…
+    expect(html).toContain('firstRunHint(state)')
+    // …and localStorage makes the dismissal survive reloads and gateway
+    // restarts — "never again" must outlive both replay and an emptied log.
+    expect(html).toContain('slopdeck_seen_session')
+  })
+
   it('serves the deck reducer as a JS module the page can import', async () => {
     const { app } = buildApp()
 

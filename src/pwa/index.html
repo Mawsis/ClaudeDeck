@@ -82,9 +82,23 @@
     100% { transform: translateY(5px); }
   }
 
+  #session-line { display: flex; align-items: baseline; justify-content: center; gap: 1.5vmin; }
   #session-title {
     font-size: 3.5vmin; color: #fff; opacity: 0.45;
-    max-width: 90vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 80vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Ambient honesty: how many sessions run behind the shown one — dim, and
+     collapsed to nothing at zero so a quiet deck carries no ghost chrome. */
+  #session-count {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; color: var(--dim); opacity: 0.55;
+  }
+  #session-count:empty { display: none; }
+  /* One-time first-run hint: visible only while no session event has ever
+     reached the log — proof the pipeline still awaits its first real event. */
+  #first-run-hint {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 2.6vmin; color: var(--dim); opacity: 0.5;
   }
   #mode-label { font-size: 2.5vmin; letter-spacing: 0.4em; }
   body[data-mode='running'] #mode-label { color: var(--accent-ambient); }
@@ -301,8 +315,12 @@
     <!-- Clawd shows the state: sprite swapped per reducer pose, never text. -->
     <img id="clawd" alt="">
     <div id="digits">--:--</div>
-    <div id="session-title"></div>
+    <div id="session-line">
+      <div id="session-title"></div>
+      <span id="session-count"></span>
+    </div>
     <div id="mode-label">IDLE</div>
+    <div id="first-run-hint" class="hidden">waiting for first session — run claude in any project</div>
     <!-- D5: one-tap Pause flips the gateway to passthrough. No arming ritual. -->
     <button id="pause-toggle" type="button">PAUSE</button>
   </section>
@@ -347,6 +365,7 @@
     deckSignature,
     deckTransition,
     deckView,
+    firstRunHint,
     formatElapsed,
     formatTimeOfDay,
     initialDeckState,
@@ -360,6 +379,7 @@
     reduceDeck,
     reducePrompts,
     reduceTicker,
+    runningCountBadge,
     STRIPE_WIPE_MS,
   } from '/deck-reducer.js'
 
@@ -370,6 +390,8 @@
   const main = document.querySelector('main')
   const digits = document.getElementById('digits')
   const sessionTitle = document.getElementById('session-title')
+  const sessionCount = document.getElementById('session-count')
+  const firstRunHintEl = document.getElementById('first-run-hint')
   const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
   const tickerEl = document.getElementById('ticker')
@@ -387,6 +409,13 @@
   const queueBadgeEl = document.getElementById('queue-badge')
 
   let state = initialDeckState
+  // "Never again" must outlive reloads, replay, and even an emptied gateway
+  // log — the one-way latch is seeded from storage and written back the
+  // moment the first session event lands.
+  const SEEN_SESSION_KEY = 'slopdeck_seen_session'
+  if (localStorage.getItem(SEEN_SESSION_KEY) === 'true') {
+    state = { ...state, seenSession: true }
+  }
   let ticker = initialTicker
   let prompts = initialPrompts
   let deckToken = null
@@ -429,6 +458,11 @@
     // nothing about pause is toggled imperatively on the DOM.
     document.body.dataset.paused = view.paused ? 'true' : 'false'
     pauseToggle.textContent = view.paused ? 'RESUME' : 'PAUSE'
+    // The running count is the reducer's word; a down stream blanks it — a
+    // stale count is the same lie as a stale clock.
+    sessionCount.textContent = view.mode === 'offline' ? '' : runningCountBadge(state)
+    // The hint is ambient guidance, not news — it too yields to offline.
+    firstRunHintEl.classList.toggle('hidden', view.mode === 'offline' || !firstRunHint(state))
     if (view.mode === 'offline') {
       digits.textContent = '--:--'
       sessionTitle.textContent = ''
@@ -505,6 +539,7 @@
       now: receiptNow,
     })
     state = reduceDeck(state, deckEvent)
+    if (state.seenSession) localStorage.setItem(SEEN_SESSION_KEY, 'true')
     if (alert !== null && alert.channel === 'in-page') fireDoneAlert()
     render()
   }

@@ -3,11 +3,14 @@ import {
   ambientShift,
   completionAlert,
   deckView,
+  firstRunHint,
   formatElapsed,
   formatTimeOfDay,
   initialDeckState,
   localEventTime,
   reduceDeck,
+  runningCountBadge,
+  runningSessionCount,
 } from '../src/pwa/deck-reducer.js'
 
 describe('deck reducer', () => {
@@ -206,6 +209,113 @@ describe('deck reducer', () => {
     const paused = reduceDeck(initialDeckState, { type: 'mode', paused: true, at: 5_000 })
 
     expect(deckView(paused, 10_000)).toEqual({ mode: 'idle', paused: true })
+  })
+})
+
+describe('running-session count', () => {
+  it('counts sessions with a prompt and no stop yet, across interleaved sessions', () => {
+    let state = initialDeckState
+    expect(runningSessionCount(state)).toBe(0)
+
+    state = reduceDeck(state, { type: 'prompt', sessionId: 'a', title: 'alpha', at: 1_000 })
+    expect(runningSessionCount(state)).toBe(1)
+
+    state = reduceDeck(state, { type: 'prompt', sessionId: 'b', title: 'beta', at: 2_000 })
+    expect(runningSessionCount(state)).toBe(2)
+
+    state = reduceDeck(state, { type: 'stop', sessionId: 'a', title: 'alpha', at: 3_000 })
+    expect(runningSessionCount(state)).toBe(1)
+
+    state = reduceDeck(state, { type: 'stop', sessionId: 'b', title: 'beta', at: 4_000 })
+    expect(runningSessionCount(state)).toBe(0)
+  })
+
+  it('never counts sessions that only ever stopped or paused — done and mode events are not running work', () => {
+    let state = reduceDeck(initialDeckState, {
+      type: 'stop',
+      sessionId: 'ghost',
+      title: 'ghost',
+      at: 1_000,
+    })
+    state = reduceDeck(state, { type: 'mode', paused: true, at: 2_000 })
+
+    expect(runningSessionCount(state)).toBe(0)
+  })
+
+  it('counts a session once no matter how many prompts queue mid-turn', () => {
+    let state = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 'a',
+      title: 'alpha',
+      at: 1_000,
+    })
+    state = reduceDeck(state, { type: 'prompt', sessionId: 'a', title: 'alpha', at: 2_000 })
+
+    expect(runningSessionCount(state)).toBe(1)
+  })
+
+  it('renders as a dim badge only while at least one session runs — hidden entirely at zero', () => {
+    expect(runningCountBadge(initialDeckState)).toBe('')
+
+    const one = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 'a',
+      title: 'alpha',
+      at: 1_000,
+    })
+    expect(runningCountBadge(one)).toBe('×1')
+
+    const two = reduceDeck(one, { type: 'prompt', sessionId: 'b', title: 'beta', at: 2_000 })
+    expect(runningCountBadge(two)).toBe('×2')
+
+    let drained = reduceDeck(two, { type: 'stop', sessionId: 'a', title: 'alpha', at: 3_000 })
+    drained = reduceDeck(drained, { type: 'stop', sessionId: 'b', title: 'beta', at: 4_000 })
+    expect(runningCountBadge(drained)).toBe('')
+  })
+})
+
+describe('first-run hint', () => {
+  it('shows only while the log has never contained a session event', () => {
+    expect(firstRunHint(initialDeckState)).toBe(true)
+
+    const prompted = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 'a',
+      title: 'alpha',
+      at: 1_000,
+    })
+    expect(firstRunHint(prompted)).toBe(false)
+  })
+
+  it('treats a bare stop as a session event too — replay may start mid-session', () => {
+    const stopped = reduceDeck(initialDeckState, {
+      type: 'stop',
+      sessionId: 'a',
+      title: 'alpha',
+      at: 1_000,
+    })
+
+    expect(firstRunHint(stopped)).toBe(false)
+  })
+
+  it('is not fooled by mode events — pausing an empty deck is not a session', () => {
+    const paused = reduceDeck(initialDeckState, { type: 'mode', paused: true, at: 1_000 })
+
+    expect(firstRunHint(paused)).toBe(true)
+  })
+
+  it('never returns once a session has been seen, whatever arrives after', () => {
+    let state = reduceDeck(initialDeckState, {
+      type: 'prompt',
+      sessionId: 'a',
+      title: 'alpha',
+      at: 1_000,
+    })
+    state = reduceDeck(state, { type: 'stop', sessionId: 'a', title: 'alpha', at: 2_000 })
+    state = reduceDeck(state, { type: 'mode', paused: true, at: 3_000 })
+    state = reduceDeck(state, { type: 'mode', paused: false, at: 4_000 })
+
+    expect(firstRunHint(state)).toBe(false)
   })
 })
 
