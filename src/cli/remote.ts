@@ -1,7 +1,7 @@
 import { HOOK_TOKEN_ENV_VAR } from '../config-generator/generate.ts'
 import { readCliConfig } from './cli-config.ts'
 import type { CliDeps, CliOutcome } from './install.ts'
-import { hasSlopdeckHooks } from './settings-surgeon.ts'
+import { hasSlopdeckHooks, hookTokenFromSettings } from './settings-surgeon.ts'
 
 /**
  * Remote controls for the gateway's pause state — the same switch the deck's
@@ -73,11 +73,15 @@ export async function status(deps: CliDeps): Promise<CliOutcome> {
   if (settings !== null && hasSlopdeckHooks(settings)) good(`hooks installed in ${paths.claudeSettings}`)
   else bad(`hooks not installed in ${paths.claudeSettings} — run \`slopdeck install\``)
 
-  const hookToken = env[HOOK_TOKEN_ENV_VAR]
+  // The token lives in the settings `env` block (cross-platform), where Claude
+  // Code reads it for hooks. Fall back to the shell env for legacy .zshrc
+  // installs so an old setup still diagnoses correctly.
+  const hookToken =
+    (settings !== null ? hookTokenFromSettings(settings) : undefined) ?? env[HOOK_TOKEN_ENV_VAR]
   if (hookToken !== undefined && hookToken !== '') {
-    good(`${HOOK_TOKEN_ENV_VAR} visible in this shell`)
+    good(`${HOOK_TOKEN_ENV_VAR} set in Claude settings`)
   } else {
-    bad(`${HOOK_TOKEN_ENV_VAR} missing in this shell — open a new shell, or check the block in ~/.zshrc`)
+    bad(`${HOOK_TOKEN_ENV_VAR} missing from ${paths.claudeSettings} — run \`slopdeck install\``)
   }
 
   if (!config.ok) {
@@ -93,7 +97,7 @@ export async function status(deps: CliDeps): Promise<CliOutcome> {
   else bad(`gateway unreachable${health.error === 'unreachable' ? ` (${health.detail})` : ` (http ${health.status})`}`)
 
   if (hookToken === undefined || hookToken === '') {
-    skip(`hook token check skipped (${HOOK_TOKEN_ENV_VAR} missing in this shell)`)
+    skip(`hook token check skipped (${HOOK_TOKEN_ENV_VAR} not set in Claude settings)`)
   } else if (!health.ok) {
     skip('hook token check skipped (gateway unreachable)')
   } else {

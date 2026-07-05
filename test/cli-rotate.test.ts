@@ -1,20 +1,31 @@
 import { describe, expect, it } from 'vitest'
+import { generateHookSettings } from '../src/config-generator/generate.ts'
 import { rotate } from '../src/cli/rotate.ts'
-import { addZshrcBlock } from '../src/cli/settings-surgeon.ts'
+import { addHookSettings } from '../src/cli/settings-surgeon.ts'
 import { configFileContent, harness, okClient, PATHS } from './cli-harness.ts'
 
 /**
  * `slopdeck rotate` re-keys a workspace: it presents the current deck key as
  * proof (holding the key is the auth), the gateway mints a fresh pair, and the
- * CLI re-inscribes both sides — new hook key in the zshrc block, new deck key
- * in the config + QR. The currently-paired phone is disconnected until it
- * re-scans; the old keys stop authenticating.
+ * CLI re-inscribes both sides — new hook key in the Claude settings env block,
+ * new deck key in the config + QR. The currently-paired phone is disconnected
+ * until it re-scans; the old keys stop authenticating.
  */
+function installedSettings(hookToken: string): string {
+  const surgery = addHookSettings(
+    '',
+    generateHookSettings({ gatewayUrl: 'https://deck.example.com' }),
+    hookToken,
+  )
+  if (!surgery.ok) throw new Error('fixture: settings surgery failed')
+  return surgery.content
+}
+
 function rotateHarness(overrides: Parameters<typeof harness>[0] = {}) {
   return harness({
     files: {
       [PATHS.configFile]: configFileContent('https://deck.example.com', 'deck-key-1'),
-      [PATHS.zshrc]: addZshrcBlock('', 'hook-key-1'),
+      [PATHS.claudeSettings]: installedSettings('hook-key-1'),
     },
     ...overrides,
   })
@@ -37,9 +48,10 @@ describe('slopdeck rotate', () => {
     expect(result.ok).toBe(true)
     // Proof presented is the old deck key from config.
     expect(rotatedWith).toEqual(['deck-key-1'])
-    // The fresh hook key replaces the old one in the zshrc block.
-    expect(disk.get(PATHS.zshrc)).toContain("export SLOPDECK_HOOK_TOKEN='hook-key-2'")
-    expect(disk.get(PATHS.zshrc)).not.toContain('hook-key-1')
+    // The fresh hook key replaces the old one in the settings env block.
+    const settings = JSON.parse(disk.get(PATHS.claudeSettings)!)
+    expect(settings.env.SLOPDECK_HOOK_TOKEN).toBe('hook-key-2')
+    expect(disk.get(PATHS.claudeSettings)).not.toContain('hook-key-1')
     // The fresh deck key replaces the old one in the config.
     expect(JSON.parse(disk.get(PATHS.configFile)!).deckKey).toBe('deck-key-2')
   })
@@ -77,7 +89,7 @@ describe('slopdeck rotate', () => {
 
     expect(result.ok).toBe(false)
     expect(writes).toHaveLength(0)
-    expect(disk.get(PATHS.zshrc)).toContain('hook-key-1')
+    expect(JSON.parse(disk.get(PATHS.claudeSettings)!).env.SLOPDECK_HOOK_TOKEN).toBe('hook-key-1')
     expect(JSON.parse(disk.get(PATHS.configFile)!).deckKey).toBe('deck-key-1')
   })
 

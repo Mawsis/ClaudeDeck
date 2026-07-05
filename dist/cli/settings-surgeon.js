@@ -34,20 +34,45 @@ function parseSettingsObject(content) {
         return null;
     return parsed;
 }
-/** Strip slopdeck matchers out of a parsed settings object — returns a new
- * object; arrays and keys emptied by the strip are dropped entirely. */
-function stripSlopdeckHooks(settings) {
-    const hooks = settings.hooks;
-    if (typeof hooks !== 'object' || hooks === null || Array.isArray(hooks))
+/** Strip slopdeck's hook token from the settings `env` block, dropping the
+ * `env` key entirely if it empties. Foreign env vars survive. */
+function stripSlopdeckEnv(settings) {
+    const env = settings.env;
+    if (typeof env !== 'object' || env === null || Array.isArray(env))
         return settings;
+    const { [HOOK_TOKEN_ENV_VAR]: _removed, ...restEnv } = env;
+    const { env: _oldEnv, ...rest } = settings;
+    return Object.keys(restEnv).length === 0 ? rest : { ...rest, env: restEnv };
+}
+/** Strip slopdeck matchers and the slopdeck env token out of a parsed settings
+ * object — returns a new object; arrays and keys emptied by the strip are
+ * dropped entirely. */
+function stripSlopdeckHooks(settings) {
+    const withoutEnv = stripSlopdeckEnv(settings);
+    const hooks = withoutEnv.hooks;
+    if (typeof hooks !== 'object' || hooks === null || Array.isArray(hooks))
+        return withoutEnv;
     const remaining = Object.fromEntries(Object.entries(hooks)
         .map(([hookEvent, matchers]) => [
         hookEvent,
         Array.isArray(matchers) ? matchers.filter((entry) => !isSlopdeckMatcher(entry)) : matchers,
     ])
         .filter(([, matchers]) => !(Array.isArray(matchers) && matchers.length === 0)));
-    const { hooks: _removed, ...rest } = settings;
+    const { hooks: _removed, ...rest } = withoutEnv;
     return Object.keys(remaining).length === 0 ? rest : { ...rest, hooks: remaining };
+}
+/** The hook token stored in the settings `env` block, or undefined if absent.
+ * The `status` command reads it here — the cross-platform source of truth,
+ * where a shell-env read would miss it (the token no longer lives in the shell). */
+export function hookTokenFromSettings(content) {
+    const settings = parseSettingsObject(content);
+    if (settings === null)
+        return undefined;
+    const env = settings.env;
+    if (typeof env !== 'object' || env === null || Array.isArray(env))
+        return undefined;
+    const token = env[HOOK_TOKEN_ENV_VAR];
+    return typeof token === 'string' && token !== '' ? token : undefined;
 }
 /** Whether settings content carries any slopdeck hook entry — the `status`
  * command's "hooks installed" chain link. Malformed content is simply "no". */
@@ -60,13 +85,24 @@ export function hasSlopdeckHooks(content) {
         return false;
     return Object.values(hooks).some((matchers) => Array.isArray(matchers) && matchers.some(isSlopdeckMatcher));
 }
+/** Set the hook token in the settings `env` block — where Claude Code injects
+ * it into hook execution on every OS. This replaces the .zshrc export, which
+ * only Unix shells ever read (Windows hooks got no token → 401). Foreign env
+ * keys pass through; a stale slopdeck token is overwritten. */
+function setTokenInEnv(settings, hookToken) {
+    const existingEnv = typeof settings.env === 'object' && settings.env !== null && !Array.isArray(settings.env)
+        ? settings.env
+        : {};
+    return { ...settings, env: { ...existingEnv, [HOOK_TOKEN_ENV_VAR]: hookToken } };
+}
 /**
- * Merge slopdeck's hook matchers into Claude settings content. Foreign
- * matchers and settings keys pass through untouched; any prior slopdeck
- * entries (even for another gateway) are replaced, never stacked. Malformed
- * input is a typed error — the caller must not write anything.
+ * Merge slopdeck's hook matchers into Claude settings content AND write the
+ * hook token into the settings `env` block. Foreign matchers, env keys, and
+ * settings keys pass through untouched; any prior slopdeck entries (even for
+ * another gateway) are replaced, never stacked. Malformed input is a typed
+ * error — the caller must not write anything.
  */
-export function addHookSettings(content, hookSettings) {
+export function addHookSettings(content, hookSettings, hookToken) {
     const settings = parseSettingsObject(content);
     if (settings === null) {
         return { ok: false, error: 'settings file is not a JSON object — refusing to touch it' };
@@ -82,7 +118,20 @@ export function addHookSettings(content, hookSettings) {
         const present = merged[hookEvent];
         merged[hookEvent] = Array.isArray(present) ? [...present, ...matchers] : [...matchers];
     }
-    return { ok: true, content: JSON.stringify({ ...cleaned, hooks: merged }, null, 2) + '\n' };
+    const withToken = setTokenInEnv(cleaned, hookToken);
+    return { ok: true, content: JSON.stringify({ ...withToken, hooks: merged }, null, 2) + '\n' };
+}
+/**
+ * Update just the hook token in the settings `env` block, leaving hooks and
+ * every foreign key intact. Used by `rotate`, which re-keys without re-writing
+ * the (already installed) hook matchers. Malformed input is a typed error.
+ */
+export function setHookToken(content, hookToken) {
+    const settings = parseSettingsObject(content);
+    if (settings === null) {
+        return { ok: false, error: 'settings file is not a JSON object — refusing to touch it' };
+    }
+    return { ok: true, content: JSON.stringify(setTokenInEnv(settings, hookToken), null, 2) + '\n' };
 }
 /**
  * Remove exactly the slopdeck entries. Surgical removal, never

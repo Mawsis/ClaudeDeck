@@ -1,6 +1,6 @@
 import { HOOK_TOKEN_ENV_VAR } from "../config-generator/generate.js";
 import { readCliConfig } from "./cli-config.js";
-import { hasSlopdeckHooks } from "./settings-surgeon.js";
+import { hasSlopdeckHooks, hookTokenFromSettings } from "./settings-surgeon.js";
 /**
  * Remote controls for the gateway's pause state — the same switch the deck's
  * Pause tap toggles, with the CLI as a second remote. These commands never
@@ -63,12 +63,15 @@ export async function status(deps) {
         good(`hooks installed in ${paths.claudeSettings}`);
     else
         bad(`hooks not installed in ${paths.claudeSettings} — run \`slopdeck install\``);
-    const hookToken = env[HOOK_TOKEN_ENV_VAR];
+    // The token lives in the settings `env` block (cross-platform), where Claude
+    // Code reads it for hooks. Fall back to the shell env for legacy .zshrc
+    // installs so an old setup still diagnoses correctly.
+    const hookToken = (settings !== null ? hookTokenFromSettings(settings) : undefined) ?? env[HOOK_TOKEN_ENV_VAR];
     if (hookToken !== undefined && hookToken !== '') {
-        good(`${HOOK_TOKEN_ENV_VAR} visible in this shell`);
+        good(`${HOOK_TOKEN_ENV_VAR} set in Claude settings`);
     }
     else {
-        bad(`${HOOK_TOKEN_ENV_VAR} missing in this shell — open a new shell, or check the block in ~/.zshrc`);
+        bad(`${HOOK_TOKEN_ENV_VAR} missing from ${paths.claudeSettings} — run \`slopdeck install\``);
     }
     if (!config.ok) {
         skip('gateway check skipped (no gateway URL without a config)');
@@ -83,7 +86,7 @@ export async function status(deps) {
     else
         bad(`gateway unreachable${health.error === 'unreachable' ? ` (${health.detail})` : ` (http ${health.status})`}`);
     if (hookToken === undefined || hookToken === '') {
-        skip(`hook token check skipped (${HOOK_TOKEN_ENV_VAR} missing in this shell)`);
+        skip(`hook token check skipped (${HOOK_TOKEN_ENV_VAR} not set in Claude settings)`);
     }
     else if (!health.ok) {
         skip('hook token check skipped (gateway unreachable)');
