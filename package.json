@@ -21,7 +21,6 @@
     "start": "node --experimental-strip-types src/gateway/index.ts",
     "generate-config": "node --experimental-strip-types src/config-generator/cli.ts",
     "build": "tsc -p tsconfig.build.json",
-    "prepare": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "canary": "SLOPDECK_CANARY=1 vitest run test/canary.askuserquestion.test.ts",
