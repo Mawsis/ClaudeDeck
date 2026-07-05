@@ -3,6 +3,11 @@ import type { Context, MiddlewareHandler } from 'hono'
 
 export type TokenScope = 'hook' | 'deck'
 
+/** The workspace id a valid key resolved to, stashed for every downstream handler. */
+export type WorkspaceVariables = {
+  workspaceId: string
+}
+
 export type AuthTokens = {
   readonly hookToken: string
   readonly deckToken: string
@@ -37,5 +42,29 @@ export function requireScope(scope: TokenScope, tokens: AuthTokens): MiddlewareH
     if (safeEquals(presented, expected)) return next()
     if (safeEquals(presented, other)) return c.json({ error: 'wrong token scope' }, 403)
     return c.json({ error: 'invalid token' }, 401)
+  }
+}
+
+/** The slice of the store the auth layer needs: key → scoped identity. */
+export type ScopeResolver = {
+  authenticateScoped(key: string): { readonly workspaceId: string; readonly scope: TokenScope } | null
+}
+
+/**
+ * The workspace-scoped gate: a presented key is resolved against the store to a
+ * `{ workspaceId, scope }`, the id is stashed on the context for downstream
+ * handlers, and scope is enforced with the same wrong-door semantics as
+ * `requireScope` — a valid key of the *other* scope is a 403, an unknown key is
+ * a 401. This replaces the two global static tokens with per-workspace keys.
+ */
+export function requireWorkspace(scope: TokenScope, store: ScopeResolver): MiddlewareHandler {
+  return async (c, next) => {
+    const presented = presentedToken(c, scope)
+    if (presented === undefined) return c.json({ error: 'missing token' }, 401)
+    const identity = store.authenticateScoped(presented)
+    if (identity === null) return c.json({ error: 'invalid token' }, 401)
+    if (identity.scope !== scope) return c.json({ error: 'wrong token scope' }, 403)
+    c.set('workspaceId', identity.workspaceId)
+    return next()
   }
 }

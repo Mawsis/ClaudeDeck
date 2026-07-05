@@ -1,9 +1,9 @@
 import { basename } from 'node:path'
 import type { Hono } from 'hono'
-import { requireScope, type AuthTokens } from './auth.ts'
-import type { EventLog } from './event-log.ts'
+import type { AppEnv, RuntimeFor } from './app.ts'
+import { requireWorkspace } from './auth.ts'
 import type { QuestionSpec } from './events.ts'
-import { createPendingPromptStore } from './pending-prompts.ts'
+import type { WorkspaceStore } from './workspace-store.ts'
 
 const MAX_TITLE_LENGTH = 120
 
@@ -101,18 +101,14 @@ function composeReason(
 export const DEFAULT_QUESTION_TIMEOUT_MS = 60_000
 
 export type QuestionRoutesConfig = {
-  readonly tokens: AuthTokens
-  readonly eventLog: EventLog
-  readonly hasDeck: () => boolean
-  /** D5: while paused, a question falls back to the terminal instead of holding. */
-  readonly isPaused?: (() => boolean) | undefined
-  readonly timeoutMs?: number | undefined
+  readonly store: WorkspaceStore
+  readonly runtimeFor: RuntimeFor
 }
 
 /** The deck's answer to an AskUserQuestion: one choice-label set per
  * question, in question order. `null` means "no answer" — every fallback,
  * so the terminal re-asks. */
-type QuestionAnswer = { readonly answers: readonly (readonly string[])[] }
+export type QuestionAnswer = { readonly answers: readonly (readonly string[])[] }
 
 /** Lenient body parse only — set-level validation needs the question specs. */
 function parseAnswersBody(body: unknown): QuestionAnswer | 'ask' | undefined {
@@ -144,20 +140,13 @@ const ASK_RESPONSE = {
  * `permissionDecision: "ask"`, which lets the question render in the
  * terminal normally.
  */
-export function registerQuestionRoutes(app: Hono, config: QuestionRoutesConfig): void {
-  const { tokens, eventLog } = config
+export function registerQuestionRoutes(app: Hono<AppEnv>, config: QuestionRoutesConfig): void {
+  const { store, runtimeFor } = config
 
-  const questionStore = createPendingPromptStore<QuestionAnswer>({
-    hasDeck: config.hasDeck,
-    ...(config.isPaused !== undefined ? { isPaused: config.isPaused } : {}),
-    timeoutMs: config.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
-  })
-  // What each held prompt actually asked — the answer route validates against
-  // it. Entries live exactly as long as the hold; every settle path (answer,
-  // ask, timeout) flows through the awaited decision below and cleans up.
-  const heldQuestions = new Map<string, readonly QuestionSpec[]>()
-
-  app.post('/api/question', requireScope('hook', tokens), async (c) => {
+  app.post('/api/question', requireWorkspace('hook', store), async (c) => {
+    // The hold store and the held-question map both come from the caller's own
+    // runtime — a question raised on workspace A is answerable only by A's deck.
+    const { eventLog, questionStore, heldQuestions } = runtimeFor(c.get('workspaceId'))
     let body: unknown
     try {
       body = await c.req.json()
@@ -212,7 +201,8 @@ export function registerQuestionRoutes(app: Hono, config: QuestionRoutesConfig):
     )
   })
 
-  app.post('/api/questions/:id/answer', requireScope('deck', tokens), async (c) => {
+  app.post('/api/questions/:id/answer', requireWorkspace('deck', store), async (c) => {
+    const { questionStore, heldQuestions } = runtimeFor(c.get('workspaceId'))
     let body: unknown
     try {
       body = await c.req.json()

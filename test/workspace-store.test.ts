@@ -3,6 +3,51 @@ import { describe, expect, it } from 'vitest'
 import { generate, hash } from '../src/gateway/workspace-key.ts'
 import { createWorkspaceStore } from '../src/gateway/workspace-store.ts'
 
+describe('workspace-store: scoped identity (hook + deck key per workspace)', () => {
+  it('mints a hook key and a deck key that both resolve to the one workspace, each with its scope', () => {
+    const store = createWorkspaceStore()
+
+    const { workspaceId, hookKey, deckKey } = store.createWorkspace()
+
+    // Two credentials, one workspace: the hook posts events and the deck reads
+    // the stream, but they land on the same isolated deck. Scope is what the
+    // auth layer uses to keep the ingest door and the stream door separate.
+    expect(store.authenticateScoped(hookKey)).toEqual({ workspaceId, scope: 'hook' })
+    expect(store.authenticateScoped(deckKey)).toEqual({ workspaceId, scope: 'deck' })
+    expect(hookKey).not.toBe(deckKey)
+  })
+
+  it('returns null from authenticateScoped for a key that belongs to no workspace', () => {
+    const store = createWorkspaceStore()
+    store.createWorkspace()
+
+    expect(store.authenticateScoped(generate())).toBeNull()
+  })
+
+  it("keeps scoped keys isolated — one workspace's deck key never resolves to another", () => {
+    const store = createWorkspaceStore()
+
+    const a = store.createWorkspace()
+    const b = store.createWorkspace()
+
+    expect(store.authenticateScoped(a.deckKey)).toEqual({ workspaceId: a.workspaceId, scope: 'deck' })
+    expect(store.authenticateScoped(b.hookKey)).toEqual({ workspaceId: b.workspaceId, scope: 'hook' })
+    expect(a.workspaceId).not.toBe(b.workspaceId)
+  })
+
+  it('seeds an implicit workspace from pre-existing hook/deck keys (env-token compat)', () => {
+    const store = createWorkspaceStore()
+
+    // The backward-compat path: two static env tokens become the hook key and
+    // deck key of one pre-seeded workspace, so an existing deployment keeps
+    // working with the exact tokens already in its .env.
+    const workspaceId = store.seedWorkspace('env-hook-token-abc', 'env-deck-token-xyz')
+
+    expect(store.authenticateScoped('env-hook-token-abc')).toEqual({ workspaceId, scope: 'hook' })
+    expect(store.authenticateScoped('env-deck-token-xyz')).toEqual({ workspaceId, scope: 'deck' })
+  })
+})
+
 describe('workspace-store: create + authenticate', () => {
   it('mints a workspace whose key authenticates back to that same workspace', () => {
     const store = createWorkspaceStore()

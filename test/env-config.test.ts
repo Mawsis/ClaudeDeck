@@ -21,11 +21,25 @@ describe('env config', () => {
     expect(config.port).toBe(9000)
   })
 
-  it('fails fast when a token is missing, naming the variable', () => {
+  it('runs with no static tokens — a hosted, mint-only gateway seeds no compat workspace', () => {
+    // The mint endpoints replace hand-generated tokens, so a token-free env is
+    // the normal hosted case, not a misconfiguration.
+    const config = loadConfigFromEnv({})
+
+    expect(config.hookToken).toBeUndefined()
+    expect(config.deckToken).toBeUndefined()
+    expect(config.port).toBe(8484)
+  })
+
+  it('fails fast when only one static token is set — a lone token cannot seed a workspace', () => {
+    // The two tokens are all-or-nothing: one alone can't form the hook+deck
+    // pair the compat workspace needs, so it is a misconfiguration, not "off".
     expect(() => loadConfigFromEnv({ SLOPDECK_HOOK_TOKEN: validEnv.SLOPDECK_HOOK_TOKEN })).toThrow(
       /SLOPDECK_DECK_TOKEN/,
     )
-    expect(() => loadConfigFromEnv({})).toThrow(/SLOPDECK_HOOK_TOKEN/)
+    expect(() => loadConfigFromEnv({ SLOPDECK_DECK_TOKEN: validEnv.SLOPDECK_DECK_TOKEN })).toThrow(
+      /SLOPDECK_HOOK_TOKEN/,
+    )
   })
 
   it('rejects tokens that are identical — scopes must be distinguishable', () => {
@@ -65,6 +79,32 @@ describe('env config', () => {
         loadConfigFromEnv({ ...validEnv, SLOPDECK_QUESTION_TIMEOUT_MS: bad }),
       ).toThrow(/SLOPDECK_QUESTION_TIMEOUT_MS/)
     }
+  })
+
+  it('leaves hosted mint disabled by default — no public mint without explicit opt-in', () => {
+    expect(loadConfigFromEnv(validEnv).hostedMint).toBeUndefined()
+  })
+
+  it('leaves local mint off by default and enables it only on explicit opt-in', () => {
+    // Off by default so a hosted gateway never exposes the ungated route; the
+    // local install turns it on with SLOPDECK_LOCAL_MINT.
+    expect(loadConfigFromEnv(validEnv).localMint).toBe(false)
+    expect(loadConfigFromEnv({ ...validEnv, SLOPDECK_LOCAL_MINT: '1' }).localMint).toBe(true)
+  })
+
+  it('enables hosted mint with an explicit per-IP rate limit and ephemeral TTL', () => {
+    const config = loadConfigFromEnv({
+      ...validEnv,
+      SLOPDECK_HOSTED_MINT: '1',
+      SLOPDECK_MINT_RATE_MAX: '5',
+      SLOPDECK_MINT_RATE_WINDOW_MS: '60000',
+      SLOPDECK_EPHEMERAL_TTL_MS: '86400000',
+    })
+
+    expect(config.hostedMint).toEqual({
+      rateLimit: { max: 5, windowMs: 60_000 },
+      ephemeralTtlMs: 86_400_000,
+    })
   })
 
   it('runs without VAPID keys — push disabled, deck alerts still work', () => {
