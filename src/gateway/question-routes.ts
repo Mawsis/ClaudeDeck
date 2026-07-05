@@ -179,6 +179,18 @@ export function registerQuestionRoutes(app: Hono<AppEnv>, config: QuestionRoutes
       eventLog.publish({ type: 'question', ...base, questions })
     }
 
+    // Claude races its terminal render against this http hook; answering in the
+    // terminal aborts the in-flight hook request. Treat a disconnect while
+    // holding as "answered at the terminal" and settle as no-answer — the
+    // resolution below then publishes question-resolved so the deck clears its
+    // now-stale card. No-op if the deck already answered.
+    const signal = c.req.raw.signal
+    if (signal !== undefined) {
+      const onAbort = () => questionStore.resolve(held.id, null)
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
+
     const answer = await held.decision
     heldQuestions.delete(held.id)
     if (held.pending) {

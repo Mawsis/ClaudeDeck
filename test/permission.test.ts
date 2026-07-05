@@ -124,6 +124,35 @@ describe('permission hold contract', () => {
     await deck.close()
   })
 
+  it('clears the deck card when the hook request aborts — the prompt was answered at the terminal', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    // Claude Code races its own terminal dialog against the http hook. Answering
+    // at the terminal makes Claude abort the in-flight hook request — the
+    // gateway must notice the disconnect and tell the deck the card is resolved,
+    // or the deck stays stuck on an already-answered question.
+    const controller = new AbortController()
+    const hookResponse = app.request('/api/permission', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${HOOK_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(permissionPayload()),
+      signal: controller.signal,
+    })
+
+    const frames = await deck.readUntil('event: permission')
+    const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
+
+    // The user answers in the terminal → Claude aborts the hook connection.
+    controller.abort()
+    await Promise.resolve(hookResponse).catch(() => {}) // the aborted fetch rejects; that's expected.
+
+    // The deck must be told the card is done, keyed on the same promptId.
+    const resolved = await deck.readUntil('event: permission-resolved')
+    expect(resolved).toContain(`"promptId":"${promptId}"`)
+    await deck.close()
+  })
+
   it('answers with the no-decision shape when a connected deck stays silent past the timeout', async () => {
     const { app } = buildApp({ permissionTimeoutMs: 30 })
     const deck = await openDeck(app)

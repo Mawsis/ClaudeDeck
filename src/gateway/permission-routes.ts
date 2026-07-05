@@ -82,6 +82,20 @@ export function registerPermissionRoutes(app: Hono<AppEnv>, config: PermissionRo
       cwd: payload.cwd,
       promptId: held.id,
     }
+
+    // Claude Code races its own terminal dialog against this http hook. When the
+    // user answers in the terminal, Claude aborts the in-flight hook request —
+    // so if the request disconnects while we're still holding, the prompt was
+    // answered at the terminal. Resolve it as a no-decision (the terminal
+    // already acted); the resolution below then publishes permission-resolved
+    // and the deck clears its now-stale card. Harmless if the deck already
+    // resolved it — settle() is a no-op on an unknown/already-settled id.
+    const signal = c.req.raw.signal
+    if (signal !== undefined) {
+      const onAbort = () => promptStore.resolve(held.id, null)
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
     const detail = permissionDetail(payload.tool_input, payload.cwd)
     // D15: risk comes from the raw command, never the display-truncated
     // detail — a truncated tail must not hide the destructive part. Scoped
