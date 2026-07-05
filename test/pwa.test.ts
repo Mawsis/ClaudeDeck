@@ -158,6 +158,20 @@ describe('PWA shell', () => {
     expect(await response.text()).toContain('export function reduceDeck')
   })
 
+  it('serves the code assets no-cache so a redeploy is not masked by a stale browser copy', async () => {
+    const { app } = buildApp()
+
+    // The shell and its modules are versioned code — a cached copy renders an
+    // old deck against a new gateway. They must revalidate every load.
+    for (const path of ['/', '/deck-reducer.js', '/sw.js']) {
+      const response = await app.request(path)
+      expect(response.headers.get('cache-control'), path).toBe('no-cache')
+    }
+    // Brand assets are content-stable and may cache.
+    const brand = await app.request('/brand/icon.svg')
+    expect(brand.headers.get('cache-control')).toContain('max-age')
+  })
+
   it('serves every brand asset from the swappable directory: starburst icon and one sprite per Clawd pose', async () => {
     const { app } = buildApp()
 

@@ -141,22 +141,41 @@ export function createApp(config: AppConfig) {
     pushRegistry.broadcast(JSON.stringify({ title: alert.title, elapsedMs: alert.elapsedMs }))
   })
 
-  app.get('/', (c) => c.html(pwaHtml))
+  // The app shell and its ES modules ARE the versioned code — a stale copy
+  // renders an old deck against a new gateway (e.g. a question card that can't
+  // read the current event shape). Serve them no-cache so the browser always
+  // revalidates: a redeploy takes effect on the next load, not hours later.
+  const NO_CACHE = 'no-cache'
+
+  app.get('/', (c) => {
+    c.header('Cache-Control', NO_CACHE)
+    return c.html(pwaHtml)
+  })
 
   app.get('/deck-reducer.js', (c) =>
-    c.body(deckReducerJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }),
+    c.body(deckReducerJs, 200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': NO_CACHE,
+    }),
   )
 
   // Brand assets are a startup-loaded whitelist — a miss is a 404, and the
-  // request path never touches the filesystem.
+  // request path never touches the filesystem. These are content-stable, so a
+  // long cache is fine (a rebrand swaps the files and bumps the deploy).
   app.get('/brand/:name', (c) => {
     const asset = brandAssets.get(c.req.param('name'))
     if (asset === undefined) return c.notFound()
-    return c.body(asset, 200, { 'Content-Type': 'image/svg+xml' })
+    return c.body(asset, 200, {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'max-age=86400',
+    })
   })
 
   app.get('/sw.js', (c) =>
-    c.body(serviceWorkerJs, 200, { 'Content-Type': 'text/javascript; charset=utf-8' }),
+    c.body(serviceWorkerJs, 200, {
+      'Content-Type': 'text/javascript; charset=utf-8',
+      'Cache-Control': NO_CACHE,
+    }),
   )
 
   app.post('/api/events', requireScope('hook', tokens), async (c) => {
