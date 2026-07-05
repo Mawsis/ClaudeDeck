@@ -12,7 +12,7 @@ describe('slopdeck install — hosted path', () => {
     // No hidden prompt for any token — the whole point of zero-token install.
     expect(hiddenPrompts).toHaveLength(0)
     const config = JSON.parse(disk.get(PATHS.configFile)!)
-    expect(config.gatewayUrl).toBe('https://slopdeck.com')
+    expect(config.gatewayUrl).toBe('https://slopdeck.mawsis.dev')
     // The minted hook key lands in the zshrc block; the deck key in config.
     expect(disk.get(PATHS.zshrc)).toContain("export SLOPDECK_HOOK_TOKEN='hook-key-1'")
     expect(config.deckKey).toBe('deck-key-1')
@@ -23,7 +23,7 @@ describe('slopdeck install — hosted path', () => {
 
     await install(deps, {})
 
-    expect(qrRenders).toEqual(['https://slopdeck.com/#deck-token=deck-key-1'])
+    expect(qrRenders).toEqual(['https://slopdeck.mawsis.dev/#deck-token=deck-key-1'])
   })
 })
 
@@ -178,7 +178,7 @@ describe('slopdeck install — pairing epilogue', () => {
     const result = await install(deps, {})
 
     expect(result.ok).toBe(true)
-    expect(qrRenders).toEqual(['https://slopdeck.com/#deck-token=deck-key-1'])
+    expect(qrRenders).toEqual(['https://slopdeck.mawsis.dev/#deck-token=deck-key-1'])
     // The handshake fires through the minted hook key, not a prompted one.
     expect(handshakes).toEqual([
       { token: 'hook-key-1', sessionId: 'slopdeck-install', cwd: '/home/u/projects/demo' },

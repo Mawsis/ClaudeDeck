@@ -8,6 +8,7 @@ import { createGatewayClient } from './gateway-client.ts'
 import { install, uninstall, type CliDeps, type FileStore } from './install.ts'
 import { qr } from './pairing.ts'
 import { setInterception, status } from './remote.ts'
+import { selectMenu, type MenuIo } from './select-menu.ts'
 import { rotate } from './rotate.ts'
 
 const USAGE = `usage:
@@ -42,6 +43,13 @@ export function parseCliArgs(argv: readonly string[]): CliArgs | null {
   return { command, gatewayUrl }
 }
 
+/** Friendly menu labels for the known install choices; falls back to the raw
+ * value for anything not listed. */
+const CHOICE_LABELS: Record<string, string> = {
+  local: 'local — runs on this machine, phone pairs over your Wi-Fi (in-page alerts)',
+  hosted: 'hosted — always-on gateway, phone pairs from anywhere (locked-screen push)',
+}
+
 function ask(question: string, hidden: boolean): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
   if (hidden) {
@@ -62,6 +70,33 @@ function ask(question: string, hidden: boolean): Promise<string> {
       resolve(answer.trim())
     })
   })
+}
+
+/** A `MenuIo` driving the real terminal, for the interactive select menu. */
+function terminalMenuIo(): MenuIo {
+  const input = process.stdin
+  const listeners = new Map<(key: string) => void, (data: Buffer) => void>()
+  return {
+    isTty: Boolean(input.isTTY) && typeof input.setRawMode === 'function',
+    setRawMode: (enabled) => input.setRawMode?.(enabled),
+    onKey: (listener) => {
+      const wrapped = (data: Buffer) => listener(data.toString())
+      listeners.set(listener, wrapped)
+      input.on('data', wrapped)
+    },
+    offKey: (listener) => {
+      const wrapped = listeners.get(listener)
+      if (wrapped !== undefined) {
+        input.removeListener('data', wrapped)
+        listeners.delete(listener)
+      }
+    },
+    resume: () => input.resume(),
+    pause: () => input.pause(),
+    write: (chunk) => process.stdout.write(chunk),
+    ask: (question) => ask(question, false),
+    onInterrupt: () => process.exit(130),
+  }
 }
 
 /** The machine's first non-internal IPv4 — what the phone dials on the LAN.
@@ -116,16 +151,12 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         if (answer === '') return defaultYes
         return answer.toLowerCase().startsWith('y')
       },
-      choose: async (question, choices) => {
-        // Repeat until the answer names one of the choices; the first choice is
-        // the default on a bare Enter.
-        for (;;) {
-          const answer = (await ask(`${question} (${choices.join('/')})`, false)).toLowerCase()
-          if (answer === '') return choices[0]!
-          const match = choices.find((choice) => choice.toLowerCase() === answer)
-          if (match !== undefined) return match
-        }
-      },
+      choose: (question, choices) =>
+        selectMenu(
+          question,
+          choices.map((value) => ({ value, label: CHOICE_LABELS[value] ?? value })),
+          terminalMenuIo(),
+        ),
       say: (line) => console.log(line),
     },
     files: realFileStore(),
