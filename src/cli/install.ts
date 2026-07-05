@@ -1,5 +1,6 @@
 import { generateHookSettings } from '../config-generator/generate.ts'
 import type { GatewayClient } from './gateway-client.ts'
+import { printPairingQr } from './pairing.ts'
 import {
   addHookSettings,
   addZshrcBlock,
@@ -40,6 +41,13 @@ export type CliDeps = {
   readonly files: FileStore
   readonly paths: CliPaths
   readonly createClient: (gatewayUrl: string) => GatewayClient
+  /** Shell environment — `status` diagnoses what this shell actually exports. */
+  readonly env: Readonly<Record<string, string | undefined>>
+  /** Renders text as a terminal QR block; injected so tests see the encoded text. */
+  readonly renderQr: (text: string) => string
+  /** Where the CLI was invoked — the handshake event carries it so the deck
+   * ticker shows a recognizable name. */
+  readonly cwd: string
 }
 
 export type CliOutcome = { readonly ok: boolean }
@@ -102,6 +110,24 @@ export async function install(
   await files.write(paths.zshrc, addZshrcBlock(zshrcBefore, hookToken))
 
   io.say('slopdeck installed — open a new shell so the hook token is exported')
+
+  // The pairing finale: QR for the phone, then a handshake through the real
+  // hook-auth path — one moment that proves DNS, TLS, hook token, gateway,
+  // SSE, and deck token end to end. A skipped QR (no deck token yet) still
+  // gets the pipeline proof.
+  await printPairingQr(deps, gatewayUrl)
+  const handshake = await client.handshake(hookToken, {
+    sessionId: 'slopdeck-install',
+    cwd: deps.cwd,
+  })
+  if (!handshake.ok) {
+    io.say(
+      'handshake failed — the setup files are in place, but the pipeline proof did not go through. ' +
+        'Check that the gateway is still running and that the hook token you entered matches its SLOPDECK_HOOK_TOKEN.',
+    )
+    return { ok: false }
+  }
+  io.say('handshake sent — look at your phone: the mascot waves when the whole chain works')
   return { ok: true }
 }
 

@@ -59,6 +59,18 @@ function stripSlopdeckHooks(settings: Record<string, unknown>): Record<string, u
   return Object.keys(remaining).length === 0 ? rest : { ...rest, hooks: remaining }
 }
 
+/** Whether settings content carries any slopdeck hook entry — the `status`
+ * command's "hooks installed" chain link. Malformed content is simply "no". */
+export function hasSlopdeckHooks(content: string): boolean {
+  const settings = parseSettingsObject(content)
+  if (settings === null) return false
+  const hooks = settings.hooks
+  if (typeof hooks !== 'object' || hooks === null || Array.isArray(hooks)) return false
+  return Object.values(hooks as Record<string, unknown>).some(
+    (matchers) => Array.isArray(matchers) && matchers.some(isSlopdeckMatcher),
+  )
+}
+
 /**
  * Merge slopdeck's hook matchers into Claude settings content. Foreign
  * matchers and settings keys pass through untouched; any prior slopdeck

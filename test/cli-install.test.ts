@@ -1,65 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { GatewayClient, GatewayResult } from '../src/cli/gateway-client.ts'
-import { install, uninstall, type CliDeps } from '../src/cli/install.ts'
-
-const PATHS = {
-  configFile: '/home/u/.config/slopdeck/config.json',
-  claudeSettings: '/home/u/.claude/settings.json',
-  zshrc: '/home/u/.zshrc',
-}
-
-function okClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
-  const yes: GatewayResult<true> = { ok: true, value: true }
-  return {
-    health: async () => yes,
-    verifyHookToken: async () => yes,
-    getPaused: async () => ({ ok: true, value: false }),
-    setPaused: async (_token, paused) => ({ ok: true, value: paused }),
-    handshake: async () => ({ ok: true, value: 1 }),
-    ...overrides,
-  }
-}
-
-function harness(options: {
-  files?: Record<string, string>
-  client?: GatewayClient
-  answers?: Partial<{ ask: string; askHidden: string; confirm: boolean }>
-}) {
-  const disk = new Map(Object.entries(options.files ?? {}))
-  const writes: string[] = []
-  const said: string[] = []
-  const hiddenPrompts: string[] = []
-  const plainPrompts: string[] = []
-
-  const deps: CliDeps = {
-    paths: PATHS,
-    io: {
-      ask: async (question) => {
-        plainPrompts.push(question)
-        return options.answers?.ask ?? 'https://deck.example.com'
-      },
-      askHidden: async (question) => {
-        hiddenPrompts.push(question)
-        return options.answers?.askHidden ?? 'hook-token-1'
-      },
-      confirm: async (_question, defaultYes) => options.answers?.confirm ?? defaultYes,
-      say: (line) => said.push(line),
-    },
-    files: {
-      read: async (path) => disk.get(path) ?? null,
-      write: async (path, content) => {
-        disk.set(path, content)
-        writes.push(path)
-      },
-      remove: async (path) => {
-        disk.delete(path)
-        writes.push(`rm:${path}`)
-      },
-    },
-    createClient: () => options.client ?? okClient(),
-  }
-  return { deps, disk, writes, said, hiddenPrompts, plainPrompts }
-}
+import { install, uninstall } from '../src/cli/install.ts'
+import { harness, okClient, PATHS } from './cli-harness.ts'
 
 describe('slopdeck install', () => {
   it('happy path: verifies gateway and token, then writes config, settings, and zshrc', async () => {
@@ -89,7 +30,7 @@ describe('slopdeck install', () => {
 
     await install(deps, {})
 
-    expect(hiddenPrompts).toHaveLength(1)
+    expect(hiddenPrompts[0]!.toLowerCase()).toContain('hook token')
     expect(disk.get(PATHS.configFile)).not.toContain('hook-token-1')
     expect(disk.get(PATHS.claudeSettings)).not.toContain('hook-token-1')
     expect(disk.get(PATHS.zshrc)).toContain('hook-token-1')
@@ -163,6 +104,85 @@ describe('slopdeck install', () => {
     expect(settings.model).toBe('opus')
     expect(settings.hooks.Stop).toHaveLength(2)
     expect(disk.get(PATHS.zshrc)).toContain('# mine\nexport EDITOR=vim\n')
+  })
+})
+
+describe('slopdeck install — pairing epilogue', () => {
+  it('ends with QR, then handshake, then the "look at your phone" instruction, in that order', async () => {
+    const handshakes: Array<{ token: string; sessionId: string; cwd: string }> = []
+    const { deps, said, qrRenders } = harness({
+      answers: { askHidden: ['hook-token-1', 'deck-token-9'] },
+      client: okClient({
+        handshake: async (token, session) => {
+          handshakes.push({ token, sessionId: session.sessionId, cwd: session.cwd })
+          return { ok: true, value: 7 }
+        },
+      }),
+    })
+
+    const result = await install(deps, {})
+
+    expect(result.ok).toBe(true)
+    expect(qrRenders).toEqual(['https://deck.example.com/#deck-token=deck-token-9'])
+    expect(handshakes).toEqual([
+      { token: 'hook-token-1', sessionId: 'slopdeck-install', cwd: '/home/u/projects/demo' },
+    ])
+    const screen = said.join('\n')
+    const qrAt = screen.indexOf('[qr for ')
+    const phoneAt = screen.toLowerCase().indexOf('look at your phone')
+    expect(qrAt).toBeGreaterThan(-1)
+    expect(phoneAt).toBeGreaterThan(qrAt)
+  })
+
+  it('reports a failed handshake clearly, leaves the setup files in place, and says what to check', async () => {
+    const { deps, disk, said } = harness({
+      answers: { askHidden: ['hook-token-1', 'deck-token-9'] },
+      client: okClient({
+        handshake: async () => ({ ok: false, error: 'unreachable', detail: 'ECONNRESET' }),
+      }),
+    })
+
+    const result = await install(deps, {})
+
+    expect(result.ok).toBe(false)
+    expect(disk.has(PATHS.configFile)).toBe(true)
+    expect(disk.has(PATHS.claudeSettings)).toBe(true)
+    expect(disk.has(PATHS.zshrc)).toBe(true)
+    const screen = said.join('\n')
+    expect(screen).toContain('handshake')
+    expect(screen).toContain('files are in place')
+    expect(screen.toLowerCase()).toContain('check')
+  })
+
+  it('never writes the deck token to any file', async () => {
+    const { deps, disk } = harness({
+      answers: { askHidden: ['hook-token-1', 'deck-token-9'] },
+    })
+
+    await install(deps, {})
+
+    for (const [, content] of disk) {
+      expect(content).not.toContain('deck-token-9')
+    }
+  })
+
+  it('a blank deck token skips the QR but still proves the pipeline with the handshake', async () => {
+    let handshakes = 0
+    const { deps, qrRenders } = harness({
+      answers: { askHidden: ['hook-token-1', ''] },
+      client: okClient({
+        handshake: async () => {
+          handshakes += 1
+          return { ok: true, value: 7 }
+        },
+      }),
+    })
+
+    const result = await install(deps, {})
+
+    expect(result.ok).toBe(true)
+    expect(qrRenders).toHaveLength(0)
+    expect(handshakes).toBe(1)
   })
 })
 

@@ -3,21 +3,36 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface, type Interface } from 'node:readline'
 import { pathToFileURL } from 'node:url'
+import qrcodeTerminal from 'qrcode-terminal'
 import { createGatewayClient } from './gateway-client.ts'
 import { install, uninstall, type CliDeps, type FileStore } from './install.ts'
+import { qr } from './pairing.ts'
+import { setInterception, status } from './remote.ts'
 
 const USAGE = `usage:
   slopdeck install [--gateway-url https://your-deck-host]
-  slopdeck uninstall`
+  slopdeck uninstall
+  slopdeck on|off     flip interception (the deck's Pause switch, remotely)
+  slopdeck status     diagnose the whole chain on one screen
+  slopdeck qr         re-print the phone-pairing QR`
+
+export type CliCommand = 'install' | 'uninstall' | 'on' | 'off' | 'status' | 'qr'
 
 export type CliArgs = {
-  readonly command: 'install' | 'uninstall'
+  readonly command: CliCommand
   readonly gatewayUrl: string | undefined
 }
 
+const BARE_COMMANDS: readonly CliCommand[] = ['uninstall', 'on', 'off', 'status', 'qr']
+
 export function parseCliArgs(argv: readonly string[]): CliArgs | null {
   const [command, ...rest] = argv
-  if (command !== 'install' && command !== 'uninstall') return null
+  // Tokens travel by hidden prompt only — no command takes one via argv,
+  // where it would land in shell history.
+  if (BARE_COMMANDS.includes(command as CliCommand)) {
+    return rest.length === 0 ? { command: command as CliCommand, gatewayUrl: undefined } : null
+  }
+  if (command !== 'install') return null
   const flagIndex = rest.indexOf('--gateway-url')
   if (flagIndex === -1) return { command, gatewayUrl: undefined }
   const gatewayUrl = rest[flagIndex + 1]
@@ -92,11 +107,32 @@ export async function runCli(argv: readonly string[]): Promise<number> {
     },
     files: realFileStore(),
     createClient: createGatewayClient,
+    env: process.env,
+    renderQr: (text) => {
+      let rendered = ''
+      // qrcode-terminal invokes the callback synchronously; small = half-height
+      // blocks so the code fits a normal terminal.
+      qrcodeTerminal.generate(text, { small: true }, (block) => {
+        rendered = block
+      })
+      return rendered
+    },
+    cwd: process.cwd(),
   }
 
-  const outcome =
-    args.command === 'install' ? await install(deps, { gatewayUrl: args.gatewayUrl }) : await uninstall(deps)
-  return outcome.ok ? 0 : 1
+  switch (args.command) {
+    case 'install':
+      return (await install(deps, { gatewayUrl: args.gatewayUrl })).ok ? 0 : 1
+    case 'uninstall':
+      return (await uninstall(deps)).ok ? 0 : 1
+    case 'on':
+    case 'off':
+      return (await setInterception(deps, args.command === 'on')).ok ? 0 : 1
+    case 'status':
+      return (await status(deps)).ok ? 0 : 1
+    case 'qr':
+      return (await qr(deps)).ok ? 0 : 1
+  }
 }
 
 const invokedDirectly =
