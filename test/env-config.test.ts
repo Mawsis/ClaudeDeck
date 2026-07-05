@@ -51,6 +51,17 @@ describe('env config', () => {
     ).toThrow(/identical/)
   })
 
+  it('leaves dbPath undefined when SLOPDECK_DB_PATH is unset or empty — the in-memory default', () => {
+    expect(loadConfigFromEnv(validEnv).dbPath).toBeUndefined()
+    expect(loadConfigFromEnv({ ...validEnv, SLOPDECK_DB_PATH: '' }).dbPath).toBeUndefined()
+  })
+
+  it('carries an explicit SLOPDECK_DB_PATH so the store can open a file that survives restarts', () => {
+    expect(loadConfigFromEnv({ ...validEnv, SLOPDECK_DB_PATH: '/data/slopdeck.sqlite' }).dbPath).toBe(
+      '/data/slopdeck.sqlite',
+    )
+  })
+
   it('defaults the alert threshold to 45s and honors an override', () => {
     expect(loadConfigFromEnv(validEnv).alertThresholdMs).toBe(45_000)
     expect(

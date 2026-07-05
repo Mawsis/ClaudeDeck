@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { generate, hash } from '../src/gateway/workspace-key.ts'
@@ -123,6 +126,26 @@ describe('workspace-store: persistence stores only the hash', () => {
       .prepare('SELECT scope FROM workspaces WHERE workspace_id = ?')
       .get(workspaceId) as { scope: string }
     expect(row.scope).toBe('hook')
+  })
+})
+
+describe('workspace-store: persistence across restarts (file-backed DB)', () => {
+  it('a workspace minted against a file survives a fresh store opened on the same path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'slopdeck-store-'))
+    const dbPath = join(dir, 'slopdeck.sqlite')
+    try {
+      // Restart #1: mint a workspace, then let the process/DB handle go away.
+      const first = createWorkspaceStore({ db: new DatabaseSync(dbPath) })
+      const { workspaceId, hookKey, deckKey } = first.createWorkspace()
+
+      // Restart #2: a brand-new store opens the *same file* — the redeploy case.
+      // If the row was only in memory, both keys would now miss.
+      const second = createWorkspaceStore({ db: new DatabaseSync(dbPath) })
+      expect(second.authenticateScoped(hookKey)).toEqual({ workspaceId, scope: 'hook' })
+      expect(second.authenticateScoped(deckKey)).toEqual({ workspaceId, scope: 'deck' })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

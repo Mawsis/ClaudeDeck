@@ -1,0 +1,49 @@
+# Host-specific override for mps: this box fronts everything with the shared
+# Dokploy Traefik on :80/:443, so slopdeck runs Caddy-free — just the gateway,
+# joined to dokploy-network, routed by Traefik labels (mirrors dmg-web).
+#
+# Workspace model (#30–#34): mint-only (no static tokens), with a persistent
+# SQLite volume so workspaces survive `up -d --build`, and IP-rate-limited
+# hosted mint. Bring up ONLY the gateway so the base Caddy never starts:
+#   docker compose -f docker-compose.yml -f docker-compose.mps.yml up -d --build gateway
+services:
+  gateway:
+    build:
+      context: ..
+    restart: unless-stopped
+    environment:
+      # Mint-only: no hand-generated static tokens. (Set both to run a legacy
+      # pre-seeded workspace instead.)
+      SLOPDECK_HOOK_TOKEN: ${SLOPDECK_HOOK_TOKEN:-}
+      SLOPDECK_DECK_TOKEN: ${SLOPDECK_DECK_TOKEN:-}
+      # Persist the workspace store on the mounted volume below.
+      SLOPDECK_DB_PATH: /data/slopdeck.sqlite
+      # Public mint, IP-rate-limited (defaults: 10 per 60000ms).
+      SLOPDECK_HOSTED_MINT: "1"
+      SLOPDECK_MINT_RATE_MAX: ${SLOPDECK_MINT_RATE_MAX:-10}
+      SLOPDECK_MINT_RATE_WINDOW_MS: ${SLOPDECK_MINT_RATE_WINDOW_MS:-60000}
+      SLOPDECK_EPHEMERAL_TTL_MS: ${SLOPDECK_EPHEMERAL_TTL_MS:-604800000}
+      SLOPDECK_VAPID_PUBLIC_KEY: ${SLOPDECK_VAPID_PUBLIC_KEY:-}
+      SLOPDECK_VAPID_PRIVATE_KEY: ${SLOPDECK_VAPID_PRIVATE_KEY:-}
+      SLOPDECK_VAPID_SUBJECT: ${SLOPDECK_VAPID_SUBJECT:-}
+      SLOPDECK_ALERT_THRESHOLD_MS: ${SLOPDECK_ALERT_THRESHOLD_MS:-}
+      SLOPDECK_QUESTION_TIMEOUT_MS: ${SLOPDECK_QUESTION_TIMEOUT_MS:-}
+    volumes:
+      - slopdeck_data:/data
+    networks:
+      - dokploy-network
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: dokploy-network
+      traefik.http.routers.slopdeck.entrypoints: websecure
+      traefik.http.routers.slopdeck.rule: Host(`slopdeck.mawsis.dev`)
+      traefik.http.routers.slopdeck.tls: "true"
+      traefik.http.routers.slopdeck.tls.certresolver: letsencrypt
+      traefik.http.services.slopdeck.loadbalancer.server.port: "8484"
+
+volumes:
+  slopdeck_data:
+
+networks:
+  dokploy-network:
+    external: true
