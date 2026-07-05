@@ -30,6 +30,17 @@ const BARE_COMMANDS: readonly CliCommand[] = ['uninstall', 'on', 'off', 'status'
 
 export function parseCliArgs(argv: readonly string[]): CliArgs | null {
   const [command, ...rest] = argv
+  // No subcommand → install. It's the natural first action, and it makes the
+  // share path robust: some `npx <github-spec> slopdeck install` forms drop the
+  // trailing `install` arg, so a bare invocation must still do the obvious
+  // thing rather than print usage. `--gateway-url` may still follow.
+  if (command === undefined || command.startsWith('--')) {
+    const flagIndex = argv.indexOf('--gateway-url')
+    if (flagIndex === -1) return { command: 'install', gatewayUrl: undefined }
+    const gatewayUrl = argv[flagIndex + 1]
+    if (gatewayUrl === undefined || gatewayUrl.startsWith('--')) return null
+    return { command: 'install', gatewayUrl }
+  }
   // Tokens travel by hidden prompt only — no command takes one via argv,
   // where it would land in shell history.
   if (BARE_COMMANDS.includes(command as CliCommand)) {
