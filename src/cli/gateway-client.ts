@@ -12,6 +12,19 @@ export type GatewayError =
 
 export type GatewayResult<T> = { readonly ok: true; readonly value: T } | GatewayError
 
+/** A freshly minted workspace: the id plus its hook and deck key material. */
+export type WorkspaceKeys = {
+  readonly workspaceId: string
+  readonly hookKey: string
+  readonly deckKey: string
+}
+
+/** A rotation's fresh pair — same workspace, new keys, both old ones now dead. */
+export type RotatedKeys = {
+  readonly hookKey: string
+  readonly deckKey: string
+}
+
 export type GatewayClient = {
   health(): Promise<GatewayResult<true>>
   verifyHookToken(hookToken: string): Promise<GatewayResult<true>>
@@ -21,6 +34,12 @@ export type GatewayClient = {
     hookToken: string,
     session: { readonly sessionId: string; readonly cwd: string },
   ): Promise<GatewayResult<number>>
+  /** Mint a fresh workspace against the ungated local endpoint (local install). */
+  mintLocal(): Promise<GatewayResult<WorkspaceKeys>>
+  /** Mint a fresh workspace against the public, rate-limited hosted endpoint. */
+  mintHosted(): Promise<GatewayResult<WorkspaceKeys>>
+  /** Re-inscribe the workspace behind `currentKey`; both old keys stop working. */
+  rotate(currentKey: string): Promise<GatewayResult<RotatedKeys>>
 }
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
@@ -115,5 +134,42 @@ export function createGatewayClient(
       if (!result.ok) return result
       return { ok: true, value: typeof result.value.id === 'number' ? result.value.id : -1 }
     },
+
+    async mintLocal() {
+      return mintAt('/api/mint/local')
+    },
+
+    async mintHosted() {
+      return mintAt('/api/mint/hosted')
+    },
+
+    async rotate(currentKey) {
+      const result = await requestJson('/api/rotate', { method: 'POST', token: currentKey })
+      if (!result.ok) return result
+      const pair = readPair(result.value)
+      // A 2xx whose body is not the documented key pair is a gateway/version
+      // mismatch, not success — surface it as an http error, never half-data.
+      if (pair === null) return { ok: false, error: 'http', status: 200 }
+      return { ok: true, value: pair }
+    },
   }
+
+  async function mintAt(path: string): Promise<GatewayResult<WorkspaceKeys>> {
+    const result = await requestJson(path, { method: 'POST' })
+    if (!result.ok) return result
+    const pair = readPair(result.value)
+    const { workspaceId } = result.value
+    if (pair === null || typeof workspaceId !== 'string' || workspaceId === '') {
+      return { ok: false, error: 'http', status: 201 }
+    }
+    return { ok: true, value: { workspaceId, ...pair } }
+  }
+}
+
+/** Extract the hook+deck key pair from a response body, or null if malformed. */
+function readPair(body: Record<string, unknown>): RotatedKeys | null {
+  const { hookKey, deckKey } = body
+  if (typeof hookKey !== 'string' || hookKey === '') return null
+  if (typeof deckKey !== 'string' || deckKey === '') return null
+  return { hookKey, deckKey }
 }

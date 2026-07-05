@@ -27,6 +27,15 @@ export type WorkspaceStore = {
    */
   seedWorkspace(hookKey: string, deckKey: string): string
   rotate(key: string): { key: string } | null
+  /**
+   * Re-inscribes a two-key workspace: presenting *either* current key re-mints
+   * BOTH the hook and deck key and returns the fresh pair, so a leaked QR (deck
+   * key) and a committed `.zshrc` (hook key) both stop authenticating at once.
+   * Returns null (a no-op) for a key that belongs to no workspace.
+   */
+  rotateWorkspace(key: string): { hookKey: string; deckKey: string } | null
+  /** Re-inscribe by workspace id (the caller already authenticated the key). */
+  rotateWorkspaceById(workspaceId: string): { hookKey: string; deckKey: string }
   touch(workspaceId: string): void
   /** The distinct workspace ids last seen strictly before `before` (would be swept). */
   expiredIds(before: number): string[]
@@ -77,6 +86,9 @@ export function createWorkspaceStore(options: WorkspaceStoreOptions = {}): Works
   const updateHash = db.prepare(
     'UPDATE workspaces SET key_hash = ? WHERE workspace_id = ?',
   )
+  const updateHashByScope = db.prepare(
+    'UPDATE workspaces SET key_hash = ? WHERE workspace_id = ? AND scope = ?',
+  )
   const updateSeen = db.prepare(
     'UPDATE workspaces SET last_seen = ? WHERE workspace_id = ?',
   )
@@ -98,6 +110,17 @@ export function createWorkspaceStore(options: WorkspaceStoreOptions = {}): Works
       if (equals(row.key_hash, key)) found = { workspaceId: row.workspace_id, scope: row.scope }
     }
     return found
+  }
+
+  // Re-mint BOTH scope rows independently (keyed by workspace_id + scope, so the
+  // hook and deck rows get distinct fresh hashes), invalidating both old keys
+  // and handing back a fresh usable pair.
+  const reinscribe = (workspaceId: string): { hookKey: string; deckKey: string } => {
+    const hookKey = generate()
+    const deckKey = generate()
+    updateHashByScope.run(hash(hookKey), workspaceId, 'hook')
+    updateHashByScope.run(hash(deckKey), workspaceId, 'deck')
+    return { hookKey, deckKey }
   }
 
   return {
@@ -148,6 +171,17 @@ export function createWorkspaceStore(options: WorkspaceStoreOptions = {}): Works
       const next = generate()
       updateHash.run(hash(next), identity.workspaceId)
       return { key: next }
+    },
+
+    rotateWorkspace(key) {
+      // Either current key proves ownership of the whole workspace.
+      const identity = findByKey(key)
+      if (identity === null) return null
+      return reinscribe(identity.workspaceId)
+    },
+
+    rotateWorkspaceById(workspaceId) {
+      return reinscribe(workspaceId)
     },
 
     touch(workspaceId) {

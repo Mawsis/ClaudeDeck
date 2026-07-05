@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, networkInterfaces } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface, type Interface } from 'node:readline'
 import { pathToFileURL } from 'node:url'
@@ -8,22 +8,24 @@ import { createGatewayClient } from './gateway-client.ts'
 import { install, uninstall, type CliDeps, type FileStore } from './install.ts'
 import { qr } from './pairing.ts'
 import { setInterception, status } from './remote.ts'
+import { rotate } from './rotate.ts'
 
 const USAGE = `usage:
   slopdeck install [--gateway-url https://your-deck-host]
   slopdeck uninstall
   slopdeck on|off     flip interception (the deck's Pause switch, remotely)
   slopdeck status     diagnose the whole chain on one screen
-  slopdeck qr         re-print the phone-pairing QR`
+  slopdeck qr         re-print the phone-pairing QR
+  slopdeck rotate     mint a fresh key and re-pair (the old key stops working)`
 
-export type CliCommand = 'install' | 'uninstall' | 'on' | 'off' | 'status' | 'qr'
+export type CliCommand = 'install' | 'uninstall' | 'on' | 'off' | 'status' | 'qr' | 'rotate'
 
 export type CliArgs = {
   readonly command: CliCommand
   readonly gatewayUrl: string | undefined
 }
 
-const BARE_COMMANDS: readonly CliCommand[] = ['uninstall', 'on', 'off', 'status', 'qr']
+const BARE_COMMANDS: readonly CliCommand[] = ['uninstall', 'on', 'off', 'status', 'qr', 'rotate']
 
 export function parseCliArgs(argv: readonly string[]): CliArgs | null {
   const [command, ...rest] = argv
@@ -60,6 +62,17 @@ function ask(question: string, hidden: boolean): Promise<string> {
       resolve(answer.trim())
     })
   })
+}
+
+/** The machine's first non-internal IPv4 — what the phone dials on the LAN.
+ * Undefined if the machine has no such address (e.g. offline). */
+function firstLanIpv4(): string | undefined {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === 'IPv4' && !address.internal) return address.address
+    }
+  }
+  return undefined
 }
 
 function realFileStore(): FileStore {
@@ -103,11 +116,22 @@ export async function runCli(argv: readonly string[]): Promise<number> {
         if (answer === '') return defaultYes
         return answer.toLowerCase().startsWith('y')
       },
+      choose: async (question, choices) => {
+        // Repeat until the answer names one of the choices; the first choice is
+        // the default on a bare Enter.
+        for (;;) {
+          const answer = (await ask(`${question} (${choices.join('/')})`, false)).toLowerCase()
+          if (answer === '') return choices[0]!
+          const match = choices.find((choice) => choice.toLowerCase() === answer)
+          if (match !== undefined) return match
+        }
+      },
       say: (line) => console.log(line),
     },
     files: realFileStore(),
     createClient: createGatewayClient,
     env: process.env,
+    lanIp: firstLanIpv4,
     renderQr: (text) => {
       let rendered = ''
       // qrcode-terminal invokes the callback synchronously; small = half-height
@@ -132,6 +156,8 @@ export async function runCli(argv: readonly string[]): Promise<number> {
       return (await status(deps)).ok ? 0 : 1
     case 'qr':
       return (await qr(deps)).ok ? 0 : 1
+    case 'rotate':
+      return (await rotate(deps)).ok ? 0 : 1
   }
 }
 

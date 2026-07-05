@@ -12,11 +12,10 @@ function installedSettings(): string {
 }
 
 describe('slopdeck on / off', () => {
-  it('on: prompts hidden for the deck token and unpauses the gateway', async () => {
+  it('on: uses the config deck key (no prompt) and unpauses the gateway', async () => {
     const calls: Array<{ token: string; paused: boolean }> = []
     const { deps, said, hiddenPrompts } = harness({
-      files: { [PATHS.configFile]: configFileContent() },
-      answers: { askHidden: 'deck-token-9' },
+      files: { [PATHS.configFile]: configFileContent('https://deck.example.com', 'deck-key-9') },
       client: okClient({
         setPaused: async (token, paused) => {
           calls.push({ token, paused })
@@ -28,17 +27,16 @@ describe('slopdeck on / off', () => {
     const result = await setInterception(deps, true)
 
     expect(result.ok).toBe(true)
-    expect(hiddenPrompts).toHaveLength(1)
-    expect(hiddenPrompts[0]!.toLowerCase()).toContain('deck token')
-    expect(calls).toEqual([{ token: 'deck-token-9', paused: false }])
+    // The deck key lives in the config now — on/off never prompts for it.
+    expect(hiddenPrompts).toHaveLength(0)
+    expect(calls).toEqual([{ token: 'deck-key-9', paused: false }])
     expect(said.join('\n')).toContain('interception on')
   })
 
-  it('off: pauses the gateway with the prompted deck token', async () => {
+  it('off: pauses the gateway with the config deck key', async () => {
     const calls: Array<{ token: string; paused: boolean }> = []
     const { deps, said } = harness({
-      files: { [PATHS.configFile]: configFileContent() },
-      answers: { askHidden: 'deck-token-9' },
+      files: { [PATHS.configFile]: configFileContent('https://deck.example.com', 'deck-key-9') },
       client: okClient({
         setPaused: async (token, paused) => {
           calls.push({ token, paused })
@@ -50,7 +48,7 @@ describe('slopdeck on / off', () => {
     const result = await setInterception(deps, false)
 
     expect(result.ok).toBe(true)
-    expect(calls).toEqual([{ token: 'deck-token-9', paused: true }])
+    expect(calls).toEqual([{ token: 'deck-key-9', paused: true }])
     expect(said.join('\n')).toContain('interception off')
   })
 
@@ -109,19 +107,20 @@ describe('slopdeck on / off', () => {
 
 describe('slopdeck status', () => {
   it('healthy chain: every link reports positively on one screen', async () => {
-    const { deps, said } = harness({
+    const { deps, said, hiddenPrompts } = harness({
       files: {
-        [PATHS.configFile]: configFileContent(),
+        [PATHS.configFile]: configFileContent('https://deck.example.com', 'deck-key-9'),
         [PATHS.claudeSettings]: installedSettings(),
       },
       env: { SLOPDECK_HOOK_TOKEN: 'hook-token-1' },
-      answers: { askHidden: 'deck-token-9' },
       client: okClient({ getPaused: async () => ({ ok: true, value: false }) }),
     })
 
     const result = await status(deps)
 
     expect(result.ok).toBe(true)
+    // The whole diagnostic runs off stored config — no prompt for any key.
+    expect(hiddenPrompts).toHaveLength(0)
     const screen = said.join('\n')
     expect(screen).toContain('config')
     expect(screen).toContain('https://deck.example.com')
@@ -129,6 +128,8 @@ describe('slopdeck status', () => {
     expect(screen).toContain('SLOPDECK_HOOK_TOKEN visible in this shell')
     expect(screen).toContain('gateway reachable')
     expect(screen).toContain('hook token accepted')
+    // The deck side of the workspace chain resolves too.
+    expect(screen).toContain('deck key resolves its workspace')
     expect(screen).toContain('interception on')
   })
 })
@@ -175,7 +176,7 @@ describe('slopdeck status — single-link failures stay identifiable', () => {
     const screen = said.join('\n')
     expect(screen).toContain('gateway unreachable')
     expect(screen).toContain('hook token check skipped (gateway unreachable)')
-    expect(screen).toContain('pause state skipped (gateway unreachable)')
+    expect(screen).toContain('deck key check skipped (gateway unreachable)')
     expect(hiddenPrompts).toHaveLength(0)
   })
 
@@ -198,17 +199,22 @@ describe('slopdeck status — single-link failures stay identifiable', () => {
     expect(screen).toContain('hook token accepted')
   })
 
-  it('skipping the pause check with a blank deck token does not fail an otherwise healthy chain', async () => {
+  it('a config with no deck key skips the deck-side check without failing the chain', async () => {
+    // A pre-workspaces config (env-token era) has no deck key; the deck-side
+    // link is skipped with a pointer at install, not counted as a failure.
     const { deps, said } = harness({
-      files: { [PATHS.configFile]: configFileContent(), [PATHS.claudeSettings]: installedSettings() },
+      files: {
+        [PATHS.configFile]:
+          JSON.stringify({ gatewayUrl: 'https://deck.example.com', interceptQuestions: false }) + '\n',
+        [PATHS.claudeSettings]: installedSettings(),
+      },
       env: { SLOPDECK_HOOK_TOKEN: 'hook-token-1' },
-      answers: { askHidden: '' },
     })
 
     const result = await status(deps)
 
     expect(result.ok).toBe(true)
-    expect(said.join('\n')).toContain('pause state skipped (no deck token provided)')
+    expect(said.join('\n')).toContain('deck key check skipped (no deck key in config')
   })
 })
 

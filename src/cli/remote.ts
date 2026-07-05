@@ -17,10 +17,16 @@ export async function setInterception(deps: CliDeps, on: boolean): Promise<CliOu
     io.say(config.error)
     return { ok: false }
   }
+  // The deck key is stored at install — no prompt. A pre-workspaces config
+  // (env-token era) without one points back at install.
+  const deckKey = config.config.deckKey
+  if (deckKey === undefined) {
+    io.say('no deck key in the config — run `slopdeck install` to mint a workspace first')
+    return { ok: false }
+  }
 
-  const deckToken = await io.askHidden('deck token')
   const client = createClient(config.config.gatewayUrl)
-  const result = await client.setPaused(deckToken, !on)
+  const result = await client.setPaused(deckKey, !on)
   if (!result.ok) {
     // Hooks degrade to terminal on any non-2xx, so a dead gateway *is* the
     // off state — `off` reports that truth and succeeds instead of lying
@@ -97,18 +103,19 @@ export async function status(deps: CliDeps): Promise<CliOutcome> {
     else bad(`hook token check failed: gateway error (${verified.error})`)
   }
 
+  // The deck side of the workspace-scoped chain: the stored deck key must
+  // resolve on the gateway (confirming key, gateway, and workspace agree) and
+  // reports the live interception mode. No prompt — the key lives in the config.
+  const deckKey = config.config.deckKey
   if (!health.ok) {
-    skip('pause state skipped (gateway unreachable)')
+    skip('deck key check skipped (gateway unreachable)')
+  } else if (deckKey === undefined) {
+    skip('deck key check skipped (no deck key in config — re-run `slopdeck install`)')
   } else {
-    const deckToken = await io.askHidden('deck token for the pause check (enter to skip)')
-    if (deckToken === '') {
-      skip('pause state skipped (no deck token provided)')
-    } else {
-      const paused = await client.getPaused(deckToken)
-      if (paused.ok) good(`interception ${paused.value ? 'off (paused)' : 'on'}`)
-      else if (paused.error === 'unauthorized') bad('deck token rejected by the gateway')
-      else bad(`pause state check failed: gateway error (${paused.error})`)
-    }
+    const paused = await client.getPaused(deckKey)
+    if (paused.ok) good(`deck key resolves its workspace — interception ${paused.value ? 'off (paused)' : 'on'}`)
+    else if (paused.error === 'unauthorized') bad('deck key rejected by the gateway — the workspace it names no longer exists')
+    else bad(`deck key check failed: gateway error (${paused.error})`)
   }
 
   return { ok: !failed }

@@ -159,6 +159,43 @@ describe('workspace-store: rotate', () => {
   })
 })
 
+describe('workspace-store: rotateWorkspace (two-key re-inscription)', () => {
+  it('re-mints BOTH the hook and deck key of the workspace, keeping the same id', () => {
+    const store = createWorkspaceStore()
+    const { workspaceId, hookKey, deckKey } = store.createWorkspace()
+
+    // Either current key proves ownership; rotation hands back a fresh usable
+    // pair (the CLI rewrites zshrc from the hook key and the QR from the deck key).
+    const rotated = store.rotateWorkspace(deckKey)
+
+    expect(rotated).not.toBeNull()
+    expect(rotated!.hookKey).not.toBe(hookKey)
+    expect(rotated!.deckKey).not.toBe(deckKey)
+    expect(store.authenticateScoped(rotated!.hookKey)).toEqual({ workspaceId, scope: 'hook' })
+    expect(store.authenticateScoped(rotated!.deckKey)).toEqual({ workspaceId, scope: 'deck' })
+  })
+
+  it('invalidates BOTH old keys — a leaked hook key and a leaked deck key both stop authenticating', () => {
+    const store = createWorkspaceStore()
+    const { hookKey, deckKey } = store.createWorkspace()
+
+    store.rotateWorkspace(hookKey)
+
+    // The whole point: the screenshotted QR (deck key) AND the committed zshrc
+    // (hook key) are both dead after one rotate.
+    expect(store.authenticateScoped(hookKey)).toBeNull()
+    expect(store.authenticateScoped(deckKey)).toBeNull()
+  })
+
+  it('returns null and changes nothing when the presented key is not a workspace', () => {
+    const store = createWorkspaceStore()
+    const { hookKey } = store.createWorkspace()
+
+    expect(store.rotateWorkspace('not-a-key')).toBeNull()
+    expect(store.authenticateScoped(hookKey)).not.toBeNull()
+  })
+})
+
 describe('workspace-store: touch', () => {
   it('advances last_seen to the current clock so expiry decisions have real data', () => {
     const db = new DatabaseSync(':memory:')

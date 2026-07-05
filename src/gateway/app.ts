@@ -2,7 +2,7 @@ import { basename } from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { DEFAULT_ALERT_THRESHOLD_MS } from '../pwa/deck-reducer.js'
-import { requireWorkspace, type WorkspaceVariables } from './auth.ts'
+import { requireAnyKey, requireWorkspace, type WorkspaceVariables } from './auth.ts'
 import { classifyBash } from './bash-classifier.ts'
 import type { DeckEvent } from './events.ts'
 import { registerMintRoutes, type MintConfig } from './mint-routes.ts'
@@ -305,6 +305,15 @@ export function createApp(config: AppConfig) {
   // The CLI's install flow verifies a pasted hook token live, before writing
   // any file — an authenticated no-op behind the same scope gate as ingest.
   app.get('/api/hook-check', requireWorkspace('hook', workspaceStore), (c) => c.json({ ok: true }, 200))
+
+  // Rotation: holding either current key re-inscribes the whole workspace. The
+  // fresh hook+deck pair comes back once; both old keys are dead immediately,
+  // so the currently-paired phone disconnects until it re-scans the new QR.
+  app.post('/api/rotate', requireAnyKey(workspaceStore), (c) => {
+    // requireAnyKey already resolved and stashed the workspace id, so we rotate
+    // by id — the fresh hook+deck pair comes back once and both old keys die.
+    return c.json(workspaceStore.rotateWorkspaceById(c.get('workspaceId')), 200)
+  })
 
   // A tap toggles interception and broadcasts the new mode through the log, so
   // it streams live and replays to any deck that reconnects (D5/D14). An
