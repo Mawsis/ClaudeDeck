@@ -4,8 +4,11 @@ services:
       context: ..
     restart: unless-stopped
     environment:
-      SLOPDECK_HOOK_TOKEN: ${SLOPDECK_HOOK_TOKEN:?set SLOPDECK_HOOK_TOKEN in deploy/.env}
-      SLOPDECK_DECK_TOKEN: ${SLOPDECK_DECK_TOKEN:?set SLOPDECK_DECK_TOKEN in deploy/.env}
+      # Optional now: absent (or both empty) → a mint-only gateway that seeds no
+      # implicit workspace. Set both to keep a legacy static-token deployment
+      # working as one pre-seeded workspace. The mps override runs token-free.
+      SLOPDECK_HOOK_TOKEN: ${SLOPDECK_HOOK_TOKEN:-}
+      SLOPDECK_DECK_TOKEN: ${SLOPDECK_DECK_TOKEN:-}
       # Optional: locked-screen completion alerts via Web Push. Generate the
       # key pair with `npx web-push generate-vapid-keys`; all three or none.
       SLOPDECK_VAPID_PUBLIC_KEY: ${SLOPDECK_VAPID_PUBLIC_KEY:-}
@@ -25,7 +28,9 @@ services:
       - "${CADDY_HTTPS_PORT:-443}:443"
     environment:
       # VPS: your domain (auto HTTPS via Let's Encrypt). Local smoke test: ":80".
-      DECK_DOMAIN: ${DECK_DOMAIN:?set DECK_DOMAIN in deploy/.env}
+      # Defaults to ":80" so the mps override (which never starts Caddy) parses
+      # without a domain; set a real domain in deploy/.env for the Caddy path.
+      DECK_DOMAIN: ${DECK_DOMAIN:-:80}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 import { serve } from '@hono/node-server'
 import webpush from 'web-push'
 import { createApp, type AlertsConfig } from './app.ts'
@@ -23,7 +24,12 @@ if (config.vapid !== undefined) {
 // deployment keeps working with the exact tokens already in its .env. Absent —
 // the mint-only hosted case — the store starts empty and workspaces arrive via
 // the mint endpoints.
-const workspaceStore = createWorkspaceStore()
+// With SLOPDECK_DB_PATH set, the store opens a file on the mounted volume so
+// workspaces survive a restart/redeploy; unset, it falls back to an in-memory
+// database (the default `createWorkspaceStore()` uses) that a restart wipes.
+const workspaceStore = createWorkspaceStore(
+  config.dbPath !== undefined ? { db: new DatabaseSync(config.dbPath) } : {},
+)
 if (config.hookToken !== undefined && config.deckToken !== undefined) {
   workspaceStore.seedWorkspace(config.hookToken, config.deckToken)
 }

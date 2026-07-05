@@ -30,6 +30,13 @@ export type GatewayConfig = {
   readonly hostedMint: HostedMintConfig | undefined
   /** The ungated `/api/mint/local` route; off unless the local install opts in. */
   readonly localMint: boolean
+  /**
+   * Absolute path to the SQLite file backing the workspace store. Absent →
+   * an in-memory database that a restart wipes (fine for tests and ephemeral
+   * runs); a hosted deploy sets this to a file on a mounted volume so
+   * workspaces survive `docker compose up -d --build`.
+   */
+  readonly dbPath: string | undefined
 }
 
 const DEFAULT_MINT_RATE_MAX = 10
@@ -130,5 +137,6 @@ export function loadConfigFromEnv(env: Record<string, string | undefined>): Gate
     vapid: loadVapid(env),
     hostedMint: loadHostedMint(env),
     localMint: env.SLOPDECK_LOCAL_MINT === '1' || env.SLOPDECK_LOCAL_MINT === 'true',
+    dbPath: env.SLOPDECK_DB_PATH === undefined || env.SLOPDECK_DB_PATH === '' ? undefined : env.SLOPDECK_DB_PATH,
   }
 }

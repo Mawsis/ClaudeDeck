@@ -102,6 +102,25 @@ describe('deploy.sh', () => {
     expect(remoteCommand).toContain("cd '/srv/apps/slopdeck'")
   })
 
+  it('layers the mps override and targets only the gateway in hosted mode', async () => {
+    const result = await runDeploy(['deploy@vps.example.com'], {
+      SLOPDECK_DEPLOY_MODE: 'hosted',
+    })
+    expect(result.code).toBe(0)
+    const remoteCommand = (result.sshArgs ?? []).at(-1) ?? ''
+    // Hosted layers the Caddy-free override and brings up only the gateway, so
+    // the base Caddy never starts behind Dokploy's shared Traefik.
+    expect(remoteCommand).toContain('-f docker-compose.yml -f docker-compose.mps.yml')
+    expect(remoteCommand).toContain('up -d --build gateway')
+  })
+
+  it('stays on the base compose stack by default (no override, all services)', async () => {
+    const result = await runDeploy(['deploy@vps.example.com'])
+    const remoteCommand = (result.sshArgs ?? []).at(-1) ?? ''
+    expect(remoteCommand).not.toContain('docker-compose.mps.yml')
+    expect(remoteCommand).toContain('docker compose up -d --build')
+  })
+
   it('propagates a remote failure as a non-zero exit', async () => {
     const result = await runDeploy(['deploy@vps.example.com'], { STUB_SSH_EXIT: '7' })
     expect(result.code).not.toBe(0)

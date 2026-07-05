@@ -27,15 +27,31 @@ export type MintRoutesConfig = {
 }
 
 /**
- * The client IP behind the hosted reverse proxy, for rate-limit keying. The
- * shipped topology is exactly one trusted proxy (Caddy), which APPENDS the
- * address it observed to `x-forwarded-for`. So the trustworthy client address
- * is the RIGHT-most entry — the hop nearest us — NOT the left-most, which is
- * whatever the client typed and can rotate per request to dodge the limit.
- * Absent header → a single shared bucket, so a direct/mis-proxied caller fails
- * closed (shared limit) rather than open (unlimited).
+ * The client IP for rate-limit keying, resolved for the deployed proxy chain.
+ *
+ * Preference order, most-trustworthy first:
+ *  1. `cf-connecting-ip` — Cloudflare's real-client header. slopdeck.mawsis.dev
+ *     sits behind Cloudflare → Traefik, and each request egresses from a
+ *     DIFFERENT Cloudflare edge IP, so the `x-forwarded-for` right-most hop
+ *     rotates per request and can NEVER accumulate a per-client bucket (this is
+ *     issue #37: 15 rapid mints all returned 201). `cf-connecting-ip` is the one
+ *     value that stays constant for a given client behind Cloudflare.
+ *  2. `x-real-ip` — set by many single-proxy setups (nginx/Traefik) to the
+ *     direct client.
+ *  3. `x-forwarded-for` RIGHT-most hop — the one-trusted-proxy case (e.g. the
+ *     old Caddy topology): the proxy APPENDS the address it observed, so the
+ *     right-most entry is the real client and the left-most is client-spoofable.
+ *
+ * Absent all three → a single shared bucket, so a direct/mis-proxied caller
+ * fails closed (shared limit) rather than open (unlimited).
  */
 function clientIp(c: Context): string {
+  const cf = c.req.header('cf-connecting-ip')
+  if (cf !== undefined && cf.trim() !== '') return cf.trim()
+
+  const realIp = c.req.header('x-real-ip')
+  if (realIp !== undefined && realIp.trim() !== '') return realIp.trim()
+
   const forwarded = c.req.header('x-forwarded-for')
   if (forwarded === undefined || forwarded === '') return 'unknown'
   const hops = forwarded.split(',').map((hop) => hop.trim()).filter((hop) => hop !== '')
