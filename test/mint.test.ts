@@ -134,6 +134,62 @@ describe('mint: hosted (IP-rate-limited)', () => {
     expect(second.status).toBe(429)
   })
 
+  it('keys on cf-connecting-ip behind Cloudflare, where the X-Forwarded-For hop rotates per edge (issue #37)', async () => {
+    const { app } = mintApp({ mint: { hostedRateLimit: { max: 1, windowMs: 60_000 } } })
+
+    // Cloudflare fronts Traefik: each request egresses from a different edge, so
+    // the right-most XFF hop is a different Cloudflare IP every time and would
+    // never accumulate a bucket. cf-connecting-ip is the one stable client id.
+    const req = (edgeIp: string): RequestInit => ({
+      method: 'POST',
+      headers: { 'cf-connecting-ip': '2a01:4f8:1c18:e86::1', 'x-forwarded-for': edgeIp },
+    })
+
+    const first = await app.request('/api/mint/hosted', req('172.71.126.174'))
+    const second = await app.request('/api/mint/hosted', req('104.23.229.139'))
+
+    expect(first.status).toBe(201)
+    // Same client, different Cloudflare edge — must still be rate-limited.
+    expect(second.status).toBe(429)
+  })
+
+  it('falls back to x-real-ip when no cf-connecting-ip is present', async () => {
+    const { app } = mintApp({ mint: { hostedRateLimit: { max: 1, windowMs: 60_000 } } })
+
+    const req: RequestInit = { method: 'POST', headers: { 'x-real-ip': '203.0.113.42' } }
+    const first = await app.request('/api/mint/hosted', req)
+    const second = await app.request('/api/mint/hosted', req)
+
+    expect(first.status).toBe(201)
+    expect(second.status).toBe(429)
+  })
+
+  it('prefers cf-connecting-ip over x-real-ip and X-Forwarded-For', async () => {
+    const { app } = mintApp({ mint: { hostedRateLimit: { max: 1, windowMs: 60_000 } } })
+
+    // One client (same cf-connecting-ip) whose x-real-ip and XFF both vary must
+    // still share one bucket — the cf header wins.
+    const a: RequestInit = {
+      method: 'POST',
+      headers: {
+        'cf-connecting-ip': '198.51.100.9',
+        'x-real-ip': '10.0.0.1',
+        'x-forwarded-for': '172.71.1.1',
+      },
+    }
+    const b: RequestInit = {
+      method: 'POST',
+      headers: {
+        'cf-connecting-ip': '198.51.100.9',
+        'x-real-ip': '10.0.0.2',
+        'x-forwarded-for': '172.71.2.2',
+      },
+    }
+
+    expect((await app.request('/api/mint/hosted', a)).status).toBe(201)
+    expect((await app.request('/api/mint/hosted', b)).status).toBe(429)
+  })
+
   it('lets an IP mint again once its window has elapsed', async () => {
     let clock = 1_000
     const { app } = mintApp({

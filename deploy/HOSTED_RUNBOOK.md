@@ -53,14 +53,12 @@ points the store at `/data/slopdeck.sqlite`.
 > not a git checkout, so `deploy.sh`'s `git pull` path does **not** apply there —
 > the box is updated by syncing source (rsync) and `docker compose ... build`.
 
-> **Fresh-volume gotcha (see issue #38):** the container runs as `node` (uid
-> 1000) but a brand-new named volume mounts `/data` as root, so the first boot
-> crash-loops on `ERR_SQLITE_ERROR: unable to open database file`. Chown the
-> volume once, then force a clean recreate:
-> ```bash
-> docker run --rm -v deploy_slopdeck_data:/data alpine chown -R 1000:1000 /data
-> docker compose -f docker-compose.yml -f docker-compose.mps.yml up -d --force-recreate gateway
-> ```
+> **Fresh volume (was issue #38, now fixed):** a brand-new named volume mounts
+> `/data` as root, but the app runs as `node` (uid 1000). The image entrypoint
+> (`deploy/docker-entrypoint.sh`) starts as root, chowns `/data` to node, then
+> drops privileges via `su-exec` — so a fresh volume boots clean with no manual
+> chown. If you ever see `ERR_SQLITE_ERROR`, confirm the entrypoint is in the
+> image (`ENTRYPOINT ["docker-entrypoint.sh"]`).
 
 ### Verify the volume BEFORE the first user (the #34 gate)
 
@@ -148,18 +146,14 @@ done
 # Expect: 201 up to the limit, then 429 for the rest.
 ```
 
-**Proxy caveat:** the limiter keys on the **right-most** `x-forwarded-for` hop,
-assuming exactly one trusted proxy (Traefik) appends the real client IP. If your
-Dokploy topology adds another proxy hop, the keyed IP may be wrong — if every
-request shares one bucket or none are limited, that's the cause. Record it as a
-follow-up issue rather than fixing ad hoc (per #34).
+**Proxy note (was issue #37, now fixed):** slopdeck.mawsis.dev is behind
+**Cloudflare → Traefik**, and each request egresses from a different Cloudflare
+edge IP — so keying on the `x-forwarded-for` right-most hop never accumulated a
+bucket (all mints returned 201). The limiter now keys on `cf-connecting-ip`
+first (stable per client behind Cloudflare), then `x-real-ip`, then the XFF
+right-most hop for single-proxy deploys. Verified: exactly `MAX` mints, then 429.
 
 - [ ] Rapid repeated mints get 429
-
-> **Known failing in prod (see issue #37):** on the mps deploy this check
-> currently **fails** — 15 rapid mints all returned 201, no 429. The limiter's
-> `x-forwarded-for` hop selection doesn't match Dokploy Traefik's forwarding.
-> Tracked in #37; hosted mint left ON in the meantime.
 
 ---
 
