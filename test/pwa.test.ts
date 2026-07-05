@@ -255,6 +255,29 @@ describe('PWA shell', () => {
     expect(html).not.toContain('innerHTML')
   })
 
+  it('the question card renders from the reducer draft, not a flat single-question shape', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The card holds an ARRAY of questions (a call may ask several at once).
+    // Rendering must step through card.questions via the draft reducer — the
+    // old code read a flat card.question/card.options that never existed on
+    // the card, so the takeover rendered blank. Guard that regression.
+    expect(html).toContain('card.questions')
+    expect(html).toContain('reduceQuestionDraft')
+    expect(html).toContain('draftAnswers')
+    expect(html).toContain('questionDraft')
+    // The answer POST carries the assembled set { answers: [[...]] }, the shape
+    // the gateway validates — not a bare { choice }, which it 400s.
+    expect(html).toMatch(/answers:\s*complete/)
+    // multiSelect needs an explicit commit step.
+    expect(html).toContain("type: 'confirm'")
+    // The card must NOT read the phantom flat fields off the card object.
+    expect(html).not.toMatch(/current\.question\b/)
+    expect(html).not.toMatch(/current\.options\b/)
+  })
+
   it('renders Clawd from the reducer pose: sprite element, pose fed by the view and the prompt queue', async () => {
     const { app } = buildApp()
 

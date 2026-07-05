@@ -268,6 +268,10 @@
     font-size: 2.2vmin; padding: 2.5vmin 1vmin;
     background: var(--bg); color: var(--prompt); border-color: var(--prompt);
   }
+  /* A toggled-on multiSelect choice reads as filled — the finger sees the set. */
+  #question-options button.selected { background: var(--prompt); color: var(--bg); }
+  #question-options #question-confirm { color: var(--done); border-color: var(--done); }
+  #question-options #question-confirm:disabled { color: var(--dim); border-color: var(--dim); opacity: 0.5; }
   #question-options #question-ask { color: var(--dim); border-color: var(--dim); }
   /* D16: side-by-side actions. D15: Deny and Ask are single taps; Allow only
      fires after a completed hold, so accidental contact with a desk-exposed
@@ -365,11 +369,13 @@
     deckSignature,
     deckTransition,
     deckView,
+    draftAnswers,
     firstRunHint,
     formatElapsed,
     formatTimeOfDay,
     initialDeckState,
     initialPrompts,
+    initialQuestionDraft,
     initialTicker,
     fragmentToken,
     handshakeWave,
@@ -378,6 +384,7 @@
     queueBadge,
     reduceDeck,
     reducePrompts,
+    reduceQuestionDraft,
     reduceTicker,
     runningCountBadge,
     STRIPE_WIPE_MS,
@@ -603,6 +610,10 @@
   // arrive paired with their permission-resolved event), so the buzz is
   // honest news either way.
   let shownPromptId = null
+  // The per-card answering draft (which question we're on, what's selected,
+  // committed answers so far). Reset whenever the top card changes — a
+  // half-answered multi-question call must not bleed into the next card.
+  let questionDraft = initialQuestionDraft
   // The takeover exists to be answered — its Clawd is always the alarmed one.
   approvalClawd.setAttribute('src', clawdSprite('alarmed'))
   function renderApproval() {
@@ -613,6 +624,10 @@
       cancelAllowHold()
       return
     }
+    // Card changed: reset the draft BEFORE rendering so options reflect the
+    // new card's first question, not the previous card's leftover step.
+    const cardChanged = current.promptId !== shownPromptId
+    if (cardChanged) questionDraft = initialQuestionDraft
     approval.classList.remove('hidden')
     const isQuestion = current.kind === 'question'
     approvalTool.textContent = isQuestion ? '? QUESTION' : '▲ ' + current.tool
@@ -621,32 +636,15 @@
     approvalSession.textContent =
       current.title + (current.sessionId ? ' · ' + current.sessionId.slice(0, 8) : '')
     queueBadgeEl.textContent = queueBadge(prompts)
-    // Question and command text are untrusted input — textContent only, never markup.
-    approvalPayload.textContent = isQuestion ? current.question : current.detail
-    // The two card kinds swap their action rails: choices for a question,
-    // hold-to-Allow / Deny / Ask for a permission.
     approvalActions.classList.toggle('hidden', isQuestion)
     questionOptions.classList.toggle('hidden', !isQuestion)
     if (isQuestion) {
-      questionOptions.replaceChildren(
-        ...current.options.map((choice) => {
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.textContent = choice
-          button.addEventListener('click', () => answerCurrentQuestion({ choice }))
-          return button
-        }),
-        (() => {
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.id = 'question-ask'
-          button.textContent = 'ASK IN TERMINAL'
-          button.addEventListener('click', () => answerCurrentQuestion({ ask: true }))
-          return button
-        })(),
-      )
+      renderQuestionStep(current)
+    } else {
+      // Command text is untrusted input — textContent only, never markup.
+      approvalPayload.textContent = current.detail
     }
-    if (current.promptId !== shownPromptId) {
+    if (cardChanged) {
       shownPromptId = current.promptId
       // A hold begun on the previous card must not keep charging over this
       // one — the finger is now resting on a different question.
@@ -692,9 +690,76 @@
     renderApproval()
   }
 
-  // A tapped choice answers the held question; ask-in-terminal sends it back
-  // to the terminal. Shares the single-resolution-in-flight guard — a double
-  // tap must not answer the next card with this card's intent.
+  // Render the question the draft is currently on: its text and its options.
+  // A single AskUserQuestion call may hold several questions — we step through
+  // them one at a time (the gateway answers the whole set at once), so the
+  // card shows questions[step], not a flat field.
+  function renderQuestionStep(card) {
+    const questions = Array.isArray(card.questions) ? card.questions : []
+    const spec = questions[questionDraft.step]
+    if (spec === undefined) {
+      // Every question answered — the POST is in flight; hold the last frame.
+      approvalPayload.textContent = ''
+      questionOptions.replaceChildren()
+      return
+    }
+    // Untrusted input — textContent only, never markup. Prefix multi-question
+    // calls with a step counter so the answerer knows more remain.
+    const progress = questions.length > 1 ? '(' + (questionDraft.step + 1) + '/' + questions.length + ') ' : ''
+    const label = spec.header ? spec.header + ' — ' + spec.question : spec.question
+    approvalPayload.textContent = progress + label
+    const options = Array.isArray(spec.options) ? spec.options : []
+    const buttons = options.map((choice) => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = choice
+      // On a multiSelect step, a tap toggles and stays; the picked ones read
+      // as pressed so the finger knows the set so far.
+      if (spec.multiSelect && questionDraft.selected.includes(choice)) {
+        button.setAttribute('aria-pressed', 'true')
+        button.classList.add('selected')
+      }
+      button.addEventListener('click', () => advanceDraft(card, { type: 'tap', choice }))
+      return button
+    })
+    // multiSelect needs an explicit commit — a set of one tap is not the
+    // answer; CONFIRM advances the step (disabled while nothing is chosen).
+    if (spec.multiSelect) {
+      const confirm = document.createElement('button')
+      confirm.type = 'button'
+      confirm.id = 'question-confirm'
+      confirm.textContent = 'CONFIRM' + (questionDraft.selected.length ? ' (' + questionDraft.selected.length + ')' : '')
+      confirm.disabled = questionDraft.selected.length === 0
+      confirm.addEventListener('click', () => advanceDraft(card, { type: 'confirm' }))
+      buttons.push(confirm)
+    }
+    const ask = document.createElement('button')
+    ask.type = 'button'
+    ask.id = 'question-ask'
+    ask.textContent = 'ASK IN TERMINAL'
+    ask.addEventListener('click', () => answerCurrentQuestion({ ask: true }))
+    buttons.push(ask)
+    questionOptions.replaceChildren(...buttons)
+  }
+
+  // A tap or confirm feeds the draft reducer. When every question has an
+  // answer the complete set posts at once; until then we re-render the next
+  // step. multiSelect toggles re-render in place (still same step).
+  function advanceDraft(card, action) {
+    if (resolving) return
+    const questions = Array.isArray(card.questions) ? card.questions : []
+    questionDraft = reduceQuestionDraft(questions, questionDraft, action)
+    const complete = draftAnswers(questions, questionDraft)
+    if (complete !== null) {
+      answerCurrentQuestion({ answers: complete })
+      return
+    }
+    renderApproval()
+  }
+
+  // Post the assembled answer set (or the ask-in-terminal escape hatch) to the
+  // held question. Shares the single-resolution-in-flight guard — a double tap
+  // must not answer the next card with this card's intent.
   async function answerCurrentQuestion(body) {
     const current = prompts[0]
     if (current === undefined || current.kind !== 'question' || resolving) return
