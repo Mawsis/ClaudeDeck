@@ -77,13 +77,27 @@ function ask(question, hidden) {
         });
     });
 }
-/** A `MenuIo` driving the real terminal, for the interactive select menu. */
+/** A `MenuIo` driving the real terminal, for the interactive select menu.
+ * Windows note: reusing process.stdin across a raw-mode menu and then readline
+ * can leave libuv's stdin handle half-closed, tripping an assertion on exit
+ * (`!(handle->flags & UV_HANDLE_CLOSING)` in win/async.c). So cleanup fully
+ * quiesces stdin — raw mode off, every 'data' listener removed, and the handle
+ * paused — before anything else touches it. */
 function terminalMenuIo() {
     const input = process.stdin;
     const listeners = new Map();
     return {
         isTty: Boolean(input.isTTY) && typeof input.setRawMode === 'function',
-        setRawMode: (enabled) => input.setRawMode?.(enabled),
+        setRawMode: (enabled) => {
+            // setRawMode can throw on a stdin that isn't a real TTY; the isTty guard
+            // above keeps us off that path, but stay defensive on the toggle.
+            try {
+                input.setRawMode?.(enabled);
+            }
+            catch {
+                /* not a raw-capable TTY — nothing to toggle */
+            }
+        },
         onKey: (listener) => {
             const wrapped = (data) => listener(data.toString());
             listeners.set(listener, wrapped);
@@ -97,10 +111,20 @@ function terminalMenuIo() {
             }
         },
         resume: () => input.resume(),
-        pause: () => input.pause(),
+        pause: () => {
+            // Remove any straggler listeners and pause so the handle is inert before
+            // readline (ask) reopens stdin — the Windows half-closed-handle guard.
+            for (const wrapped of listeners.values())
+                input.removeListener('data', wrapped);
+            listeners.clear();
+            input.pause();
+        },
         write: (chunk) => process.stdout.write(chunk),
         ask: (question) => ask(question, false),
-        onInterrupt: () => process.exit(130),
+        onInterrupt: () => {
+            quietStdin();
+            process.exit(130);
+        },
     };
 }
 /** The machine's first non-internal IPv4 — what the phone dials on the LAN.
@@ -189,10 +213,33 @@ export async function runCli(argv) {
             return (await rotate(deps)).ok ? 0 : 1;
     }
 }
+/**
+ * Restore stdin before exit. On Windows, calling process.exit() while stdin is
+ * still in raw mode or holding an active libuv handle trips an assertion in
+ * win/async.c (`!(handle->flags & UV_HANDLE_CLOSING)`) — a crash *after* the
+ * command already succeeded. Turning raw mode off, unref-ing, and pausing the
+ * handle lets the process exit cleanly on every platform.
+ */
+function quietStdin() {
+    const input = process.stdin;
+    try {
+        input.setRawMode?.(false);
+    }
+    catch {
+        /* stdin not a raw-capable TTY */
+    }
+    input.removeAllListeners('data');
+    input.unref?.();
+    input.pause();
+}
 const invokedDirectly = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (invokedDirectly) {
-    runCli(process.argv.slice(2)).then((code) => process.exit(code), (error) => {
+    runCli(process.argv.slice(2)).then((code) => {
+        quietStdin();
+        process.exit(code);
+    }, (error) => {
         console.error(error instanceof Error ? error.message : String(error));
+        quietStdin();
         process.exit(1);
     });
 }
