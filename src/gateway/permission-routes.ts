@@ -1,12 +1,12 @@
 import { basename } from 'node:path'
 import type { Hono } from 'hono'
-import { requireScope, type AuthTokens } from './auth.ts'
+import type { AppEnv, RuntimeFor } from './app.ts'
+import { requireWorkspace } from './auth.ts'
 import { classifyBash } from './bash-classifier.ts'
-import type { EventLog } from './event-log.ts'
 import type { PermissionRisk } from './events.ts'
-import { createPendingPromptStore } from './pending-prompts.ts'
 import type { PushRegistry } from './push-registry.ts'
 import { clampDetail, extractToolDetail, permissionDetail } from './tool-detail.ts'
+import type { WorkspaceStore } from './workspace-store.ts'
 
 const MAX_TITLE_LENGTH = 120
 
@@ -42,32 +42,24 @@ function parseResolutionAction(body: unknown): ResolutionAction | undefined {
 }
 
 export type PermissionRoutesConfig = {
-  readonly tokens: AuthTokens
-  readonly eventLog: EventLog
+  readonly store: WorkspaceStore
+  readonly runtimeFor: RuntimeFor
   readonly pushRegistry?: PushRegistry | undefined
-  readonly hasDeck: () => boolean
-  /** D5: while paused, a prompt falls back to the terminal instead of holding. */
-  readonly isPaused?: (() => boolean) | undefined
-  /** Test seam only — production uses the 540s D4 default. */
-  readonly timeoutMs?: number | undefined
 }
 
 /**
  * The permission gate (D3/D4): a PermissionRequest http hook is held open
  * while the deck decides, then answered with the documented decision JSON —
  * or with `{}` (no decision, the terminal dialog proceeds) for Ask-in-terminal
- * and every fallback. Never auto-deny.
+ * and every fallback. Never auto-deny. Every hold, event, and resolution is
+ * scoped to the caller's workspace runtime — a prompt on workspace A can only
+ * be rendered and answered by A's deck.
  */
-export function registerPermissionRoutes(app: Hono, config: PermissionRoutesConfig): void {
-  const { tokens, eventLog, pushRegistry } = config
+export function registerPermissionRoutes(app: Hono<AppEnv>, config: PermissionRoutesConfig): void {
+  const { store, runtimeFor, pushRegistry } = config
 
-  const promptStore = createPendingPromptStore({
-    hasDeck: config.hasDeck,
-    ...(config.isPaused !== undefined ? { isPaused: config.isPaused } : {}),
-    ...(config.timeoutMs !== undefined ? { timeoutMs: config.timeoutMs } : {}),
-  })
-
-  app.post('/api/permission', requireScope('hook', tokens), async (c) => {
+  app.post('/api/permission', requireWorkspace('hook', store), async (c) => {
+    const { eventLog, permStore: promptStore } = runtimeFor(c.get('workspaceId'))
     let body: unknown
     try {
       body = await c.req.json()
@@ -129,7 +121,8 @@ export function registerPermissionRoutes(app: Hono, config: PermissionRoutesConf
     return c.json({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision } }, 200)
   })
 
-  app.post('/api/prompts/:id/resolution', requireScope('deck', tokens), async (c) => {
+  app.post('/api/prompts/:id/resolution', requireWorkspace('deck', store), async (c) => {
+    const { permStore: promptStore } = runtimeFor(c.get('workspaceId'))
     let body: unknown
     try {
       body = await c.req.json()

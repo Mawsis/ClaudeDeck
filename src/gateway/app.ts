@@ -1,19 +1,26 @@
 import { basename } from 'node:path'
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
-import { completionAlert, DEFAULT_ALERT_THRESHOLD_MS, initialDeckState, reduceDeck } from '../pwa/deck-reducer.js'
-import { requireScope, type AuthTokens } from './auth.ts'
+import { DEFAULT_ALERT_THRESHOLD_MS } from '../pwa/deck-reducer.js'
+import { requireWorkspace, type WorkspaceVariables } from './auth.ts'
 import { classifyBash } from './bash-classifier.ts'
-import type { EventLog } from './event-log.ts'
 import type { DeckEvent } from './events.ts'
-import { createPauseState } from './pause-state.ts'
+import { registerMintRoutes, type MintConfig } from './mint-routes.ts'
 import { registerPermissionRoutes } from './permission-routes.ts'
-import { registerQuestionRoutes } from './question-routes.ts'
+import { DEFAULT_QUESTION_TIMEOUT_MS, registerQuestionRoutes } from './question-routes.ts'
 import { createPushRegistry, type PushSender, type PushSubscriptionJson } from './push-registry.ts'
 import { loadBrandAssets, loadDeckReducerJs, loadPwaHtml, loadServiceWorkerJs } from './static.ts'
 import { clampDetail, extractToolDetail } from './tool-detail.ts'
+import { createWorkspaceRuntime, type WorkspaceRuntime } from './workspace-runtime.ts'
+import type { WorkspaceStore } from './workspace-store.ts'
 
 export type { PushSender, PushSubscriptionJson } from './push-registry.ts'
+
+/** Every route is workspace-scoped: auth stashes the resolved id, handlers read it. */
+export type AppEnv = { Variables: WorkspaceVariables }
+
+/** How a handler reaches the caller's isolated state — lazily built, cached by id. */
+export type RuntimeFor = (workspaceId: string) => WorkspaceRuntime
 
 export type AlertsConfig = {
   readonly thresholdMs?: number
@@ -22,8 +29,9 @@ export type AlertsConfig = {
   readonly sendPush?: PushSender
 }
 
-export type AppConfig = AuthTokens & {
-  readonly eventLog: EventLog
+export type AppConfig = {
+  /** The identity/isolation store — resolves keys to workspaces and mints them. */
+  readonly workspaceStore: WorkspaceStore
   readonly maxStreamClients?: number
   readonly now?: () => number
   readonly alerts?: AlertsConfig
@@ -31,6 +39,8 @@ export type AppConfig = AuthTokens & {
   readonly permissionTimeoutMs?: number
   /** Question hold window; defaults to 60s, separate from the 540s permission policy. */
   readonly questionTimeoutMs?: number
+  /** Mint endpoints; absent hosted rate-limit disables the hosted endpoint. */
+  readonly mint?: MintConfig
 }
 
 const DEFAULT_MAX_STREAM_CLIENTS = 8
@@ -109,37 +119,46 @@ function parseHookPayload(body: unknown): HookPayload | undefined {
 }
 
 export function createApp(config: AppConfig) {
-  const { eventLog, hookToken, deckToken } = config
+  const { workspaceStore } = config
   const now = config.now ?? Date.now
   // Event ids restart at 1 with the process; the bootId is what lets a deck
   // that stayed open across a gateway restart tell a colliding fresh id from
-  // a duplicate delivery of an old one.
+  // a duplicate delivery of an old one. Process-global by design: it identifies
+  // the gateway boot, not the workspace.
   const bootId = crypto.randomUUID()
-  const tokens: AuthTokens = { hookToken, deckToken }
   const pwaHtml = loadPwaHtml()
   const deckReducerJs = loadDeckReducerJs()
   const serviceWorkerJs = loadServiceWorkerJs()
   const brandAssets = loadBrandAssets()
-  const app = new Hono()
+  const app = new Hono<AppEnv>()
 
   const alertThresholdMs = config.alerts?.thresholdMs ?? DEFAULT_ALERT_THRESHOLD_MS
+  const questionTimeoutMs = config.questionTimeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS
   const sendPush = config.alerts?.sendPush
   const pushRegistry = sendPush === undefined ? undefined : createPushRegistry(sendPush)
 
-  // D5: the deck's one-tap Pause flips interception off; while paused, a held
-  // prompt falls back instantly to the terminal instead of rendering a card.
-  const pauseState = createPauseState()
-
-  // The gateway mirrors the deck's state through the same pure reducer; when
-  // the deck is dark, this is where the alert decision still gets made.
-  let deckState = initialDeckState
-  eventLog.subscribe((event) => {
-    if (event.type !== 'prompt' && event.type !== 'stop') return
-    const alert = completionAlert(deckState, event, { thresholdMs: alertThresholdMs })
-    deckState = reduceDeck(deckState, event)
-    if (alert === null || pushRegistry === undefined) return
-    pushRegistry.broadcast(JSON.stringify({ title: alert.title, elapsedMs: alert.elapsedMs }))
-  })
+  // The isolation registry: one runtime per workspace, built on first touch and
+  // cached. Each runtime owns its event ring buffer, pause bit, held-prompt
+  // stores, and deck list — nothing here is shared across the boundary, so a
+  // handler that reads `runtimeFor(c.get('workspaceId'))` can only ever see the
+  // caller's own state. This is the structural guarantee behind isolation.
+  const runtimes = new Map<string, WorkspaceRuntime>()
+  const runtimeFor: RuntimeFor = (workspaceId) => {
+    let runtime = runtimes.get(workspaceId)
+    if (runtime === undefined) {
+      runtime = createWorkspaceRuntime({
+        ...(config.now ? { now: config.now } : {}),
+        alertThresholdMs,
+        ...(config.permissionTimeoutMs !== undefined
+          ? { permissionTimeoutMs: config.permissionTimeoutMs }
+          : {}),
+        questionTimeoutMs,
+        pushRegistry,
+      })
+      runtimes.set(workspaceId, runtime)
+    }
+    return runtime
+  }
 
   // The app shell and its ES modules ARE the versioned code — a stale copy
   // renders an old deck against a new gateway (e.g. a question card that can't
@@ -178,7 +197,7 @@ export function createApp(config: AppConfig) {
     }),
   )
 
-  app.post('/api/events', requireScope('hook', tokens), async (c) => {
+  app.post('/api/events', requireWorkspace('hook', workspaceStore), async (c) => {
     let body: unknown
     try {
       body = await c.req.json()
@@ -197,6 +216,10 @@ export function createApp(config: AppConfig) {
       )
     }
 
+    // The hook key resolved to exactly one workspace; its event lands only in
+    // that workspace's ring buffer and reaches only that workspace's decks.
+    const { eventLog } = runtimeFor(c.get('workspaceId'))
+    workspaceStore.touch(c.get('workspaceId'))
     const base = {
       sessionId: payload.session_id,
       title: basename(payload.cwd).slice(0, MAX_TITLE_LENGTH),
@@ -219,17 +242,17 @@ export function createApp(config: AppConfig) {
     return c.json({ id: event.id }, 202)
   })
 
-  app.get('/api/deck-config', requireScope('deck', tokens), (c) =>
+  app.get('/api/deck-config', requireWorkspace('deck', workspaceStore), (c) =>
     c.json({
       alertThresholdMs,
       vapidPublicKey: config.alerts?.vapidPublicKey ?? null,
       // A hard reload starts from initialDeckState (unpaused) and gets no SSE
       // replay without a Last-Event-ID; deck-config is where it learns the mode.
-      paused: pauseState.isPaused(),
+      paused: runtimeFor(c.get('workspaceId')).pauseState.isPaused(),
     }),
   )
 
-  app.post('/api/push/subscriptions', requireScope('deck', tokens), async (c) => {
+  app.post('/api/push/subscriptions', requireWorkspace('deck', workspaceStore), async (c) => {
     let body: unknown
     try {
       body = await c.req.json()
@@ -251,20 +274,15 @@ export function createApp(config: AppConfig) {
   })
 
   const maxStreamClients = config.maxStreamClients ?? DEFAULT_MAX_STREAM_CLIENTS
-  // Oldest-first so exceeding the cap evicts stale/dead connections rather
-  // than locking out a reconnecting deck.
-  const activeStreamClosers: Array<() => void> = []
 
   // D3/D4/D5: a permission prompt is held only while a deck stream is open to
   // render it and interception is on — otherwise holding just delays the
-  // terminal dialog.
+  // terminal dialog. Per-workspace: the hold store, deck presence, and pause
+  // bit all come from the caller's own runtime.
   registerPermissionRoutes(app, {
-    tokens,
-    eventLog,
+    store: workspaceStore,
+    runtimeFor,
     pushRegistry,
-    hasDeck: () => activeStreamClosers.length > 0,
-    isPaused: () => pauseState.isPaused(),
-    timeoutMs: config.permissionTimeoutMs,
   })
 
   // The AskUserQuestion hack shares the permission gate's fallback policy
@@ -272,36 +290,45 @@ export function createApp(config: AppConfig) {
   // always exists — the opt-in feature flag lives in the generated hook
   // config, so an un-flagged workstation simply never calls it.
   registerQuestionRoutes(app, {
-    tokens,
-    eventLog,
-    hasDeck: () => activeStreamClosers.length > 0,
-    isPaused: () => pauseState.isPaused(),
-    timeoutMs: config.questionTimeoutMs,
+    store: workspaceStore,
+    runtimeFor,
+  })
+
+  // Mint: local is ungated (localhost is the trust boundary); hosted is public
+  // and IP-rate-limited. Both hand back a fresh workspace's keys, no token typed.
+  registerMintRoutes(app, {
+    store: workspaceStore,
+    ...(config.mint ? { mint: config.mint } : {}),
+    ...(config.now ? { now: config.now } : {}),
   })
 
   // The CLI's install flow verifies a pasted hook token live, before writing
   // any file — an authenticated no-op behind the same scope gate as ingest.
-  app.get('/api/hook-check', requireScope('hook', tokens), (c) => c.json({ ok: true }, 200))
+  app.get('/api/hook-check', requireWorkspace('hook', workspaceStore), (c) => c.json({ ok: true }, 200))
 
   // A tap toggles interception and broadcasts the new mode through the log, so
   // it streams live and replays to any deck that reconnects (D5/D14). An
   // explicit `{ paused }` body sets instead of flipping — idempotent, for the
-  // CLI's on/off remote; the deck's bare-body tap keeps its toggle.
-  app.post('/api/pause', requireScope('deck', tokens), async (c) => {
+  // CLI's on/off remote; the deck's bare-body tap keeps its toggle. Scoped to
+  // the caller's workspace: pausing one deck never pauses another's.
+  app.post('/api/pause', requireWorkspace('deck', workspaceStore), async (c) => {
     let requested: unknown
     try {
       requested = ((await c.req.json()) as Record<string, unknown>).paused
     } catch {
       requested = undefined
     }
+    const { eventLog, pauseState } = runtimeFor(c.get('workspaceId'))
     const paused =
       typeof requested === 'boolean' ? pauseState.set(requested) : pauseState.toggle()
     eventLog.publish({ type: 'mode', paused })
     return c.json({ paused }, 200)
   })
 
-  app.get('/api/stream', requireScope('deck', tokens), (c) =>
-    streamSSE(
+  app.get('/api/stream', requireWorkspace('deck', workspaceStore), (c) => {
+    const { eventLog, streamClosers } = runtimeFor(c.get('workspaceId'))
+    workspaceStore.touch(c.get('workspaceId'))
+    return streamSSE(
       c,
       async (stream) => {
         let finish!: () => void
@@ -318,6 +345,7 @@ export function createApp(config: AppConfig) {
           })
         // Snapshot the missed events and subscribe in the same synchronous
         // block: publish() is synchronous, so nothing can slip between them.
+        // Both `since` and `subscribe` are this workspace's own log.
         const missed = eventLog.since(parseLastEventId(c.req.header('Last-Event-ID')))
         const unsubscribe = eventLog.subscribe(writeEvent)
         for (const event of missed) {
@@ -328,13 +356,13 @@ export function createApp(config: AppConfig) {
           finish()
         }
 
-        activeStreamClosers.push(close)
-        while (activeStreamClosers.length > maxStreamClients) {
-          activeStreamClosers.shift()!()
+        streamClosers.push(close)
+        while (streamClosers.length > maxStreamClients) {
+          streamClosers.shift()!()
         }
         stream.onAbort(() => {
-          const index = activeStreamClosers.indexOf(close)
-          if (index !== -1) activeStreamClosers.splice(index, 1)
+          const index = streamClosers.indexOf(close)
+          if (index !== -1) streamClosers.splice(index, 1)
           close()
         })
 
@@ -343,8 +371,31 @@ export function createApp(config: AppConfig) {
       async (error) => {
         console.error('sse stream error:', error)
       },
-    ),
-  )
+    )
+  })
 
-  return app
+  /**
+   * Sweep expired anonymous workspaces AND evict their in-memory runtimes in
+   * lockstep, so a swept workspace leaves nothing behind — its store row is
+   * deleted and its EventLog/pending-stores/deck list are dropped from the
+   * registry. Returns the swept workspace ids. Without this the `runtimes` Map
+   * would grow unbounded as ephemeral workspaces churn.
+   */
+  const sweepExpired = (before: number): string[] => {
+    const ids = workspaceStore.expiredIds(before)
+    workspaceStore.deleteExpired(before)
+    for (const id of ids) {
+      const runtime = runtimes.get(id)
+      // Close any lingering streams before dropping the runtime so no writer is
+      // left holding a reference to a workspace that no longer exists.
+      runtime?.streamClosers.splice(0).forEach((close) => close())
+      runtimes.delete(id)
+    }
+    return ids
+  }
+
+  // `runtimeFor` is returned so a caller (server bootstrap, tests) can reach a
+  // workspace's own event log directly — e.g. to seed or inspect it. Handlers
+  // never need it from outside; they resolve their runtime off the context.
+  return { app, runtimeFor, sweepExpired }
 }

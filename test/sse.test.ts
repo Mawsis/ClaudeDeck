@@ -1,6 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { createApp } from '../src/gateway/app.ts'
-import { createEventLog } from '../src/gateway/event-log.ts'
 import { buildApp, DECK_TOKEN, HOOK_TOKEN } from './helpers.ts'
 
 describe('SSE stream', () => {
@@ -96,8 +94,7 @@ describe('SSE stream', () => {
 
   it('stamps every frame with serverNow so clients can rebase event age onto their own clock', async () => {
     let clock = 10_000
-    const eventLog = createEventLog({ now: () => clock })
-    const app = createApp({ hookToken: HOOK_TOKEN, deckToken: DECK_TOKEN, eventLog, now: () => clock })
+    const { app, eventLog } = buildApp({ now: () => clock })
     eventLog.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
     eventLog.publish({ type: 'prompt', sessionId: 's1', title: 'a', cwd: '/a' })
 
@@ -161,13 +158,7 @@ describe('SSE stream', () => {
   })
 
   it('evicts the oldest stream when the client cap is exceeded, keeping the newest live', async () => {
-    const eventLog = createEventLog()
-    const app = createApp({
-      hookToken: HOOK_TOKEN,
-      deckToken: DECK_TOKEN,
-      eventLog,
-      maxStreamClients: 1,
-    })
+    const { app, eventLog } = buildApp({ maxStreamClients: 1 })
 
     const first = await app.request(`/api/stream?token=${DECK_TOKEN}`)
     const firstReader = first.body!.getReader()
