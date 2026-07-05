@@ -1,5 +1,7 @@
 import { serve } from '@hono/node-server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createApp } from '../src/gateway/app.ts'
+import { createWorkspaceStore } from '../src/gateway/workspace-store.ts'
 import { createGatewayClient } from '../src/cli/gateway-client.ts'
 import { buildApp, DECK_TOKEN, HOOK_TOKEN } from './helpers.ts'
 
@@ -76,5 +78,82 @@ describe('gateway-client', () => {
       error: 'unauthorized',
       status: 403,
     })
+  })
+})
+
+describe('gateway-client: mint + rotate', () => {
+  let mintServer: ReturnType<typeof serve>
+  let mintUrl: string
+  let store: ReturnType<typeof createWorkspaceStore>
+
+  beforeAll(async () => {
+    store = createWorkspaceStore()
+    const { app } = createApp({
+      workspaceStore: store,
+      mint: { local: true, hostedRateLimit: { max: 100, windowMs: 60_000 } },
+    })
+    await new Promise<void>((resolve) => {
+      mintServer = serve({ fetch: app.fetch, port: 0 }, (info) => {
+        mintUrl = `http://127.0.0.1:${info.port}`
+        resolve()
+      })
+    })
+  })
+
+  afterAll(() => {
+    mintServer.close()
+  })
+
+  it('mints a local workspace and hands back a key pair that authenticates', async () => {
+    const client = createGatewayClient(mintUrl)
+
+    const result = await client.mintLocal()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(store.authenticateScoped(result.value.hookKey)).toEqual({
+      workspaceId: result.value.workspaceId,
+      scope: 'hook',
+    })
+    expect(store.authenticateScoped(result.value.deckKey)).toEqual({
+      workspaceId: result.value.workspaceId,
+      scope: 'deck',
+    })
+  })
+
+  it('mints a hosted workspace the same way', async () => {
+    const client = createGatewayClient(mintUrl)
+
+    const result = await client.mintHosted()
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(store.authenticateScoped(result.value.deckKey)).toEqual({
+      workspaceId: result.value.workspaceId,
+      scope: 'deck',
+    })
+  })
+
+  it('rotates a workspace and returns a fresh pair; the old key stops authenticating', async () => {
+    const client = createGatewayClient(mintUrl)
+    const minted = await client.mintLocal()
+    if (!minted.ok) throw new Error('mint failed')
+
+    const rotated = await client.rotate(minted.value.deckKey)
+
+    expect(rotated.ok).toBe(true)
+    if (!rotated.ok) return
+    expect(store.authenticateScoped(minted.value.deckKey)).toBeNull()
+    expect(store.authenticateScoped(rotated.value.deckKey)).not.toBeNull()
+  })
+
+  it('surfaces a rotate with an unknown key as typed unauthorized', async () => {
+    const client = createGatewayClient(mintUrl)
+
+    const result = await client.rotate(
+      '0000000000000000000000000000000000000000000000000000000000000000',
+    )
+
+    expect(result).toEqual({ ok: false, error: 'unauthorized', status: 401 })
   })
 })

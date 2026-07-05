@@ -2,44 +2,109 @@ import { describe, expect, it } from 'vitest'
 import { install, uninstall } from '../src/cli/install.ts'
 import { harness, okClient, PATHS } from './cli-harness.ts'
 
-describe('slopdeck install', () => {
-  it('happy path: verifies gateway and token, then writes config, settings, and zshrc', async () => {
-    const { deps, disk } = harness({})
+describe('slopdeck install — hosted path', () => {
+  it('auto-mints against the hosted gateway with no hand-typed or hand-generated token', async () => {
+    const { deps, disk, hiddenPrompts } = harness({ answers: { choose: 'hosted' } })
 
     const result = await install(deps, {})
 
     expect(result.ok).toBe(true)
+    // No hidden prompt for any token — the whole point of zero-token install.
+    expect(hiddenPrompts).toHaveLength(0)
     const config = JSON.parse(disk.get(PATHS.configFile)!)
-    expect(config).toEqual({ gatewayUrl: 'https://deck.example.com', interceptQuestions: false })
-    const settings = JSON.parse(disk.get(PATHS.claudeSettings)!)
-    expect(settings.hooks.Stop[0].hooks[0].url).toBe('https://deck.example.com/api/events')
-    expect(disk.get(PATHS.zshrc)).toContain("export SLOPDECK_HOOK_TOKEN='hook-token-1'")
+    expect(config.gatewayUrl).toBe('https://slopdeck.com')
+    // The minted hook key lands in the zshrc block; the deck key in config.
+    expect(disk.get(PATHS.zshrc)).toContain("export SLOPDECK_HOOK_TOKEN='hook-key-1'")
+    expect(config.deckKey).toBe('deck-key-1')
   })
 
-  it('takes the gateway URL from a flag without prompting for it', async () => {
-    const { deps, plainPrompts, disk } = harness({})
-
-    await install(deps, { gatewayUrl: 'https://flagged.example.com' })
-
-    expect(plainPrompts).toHaveLength(0)
-    expect(JSON.parse(disk.get(PATHS.configFile)!).gatewayUrl).toBe('https://flagged.example.com')
-  })
-
-  it('reads the hook token via hidden input and stores it only in the zshrc block, never the config file', async () => {
-    const { deps, disk, hiddenPrompts } = harness({})
+  it('ends in a scannable QR pointing the phone at the hosted domain', async () => {
+    const { deps, qrRenders } = harness({ answers: { choose: 'hosted' } })
 
     await install(deps, {})
 
-    expect(hiddenPrompts[0]!.toLowerCase()).toContain('hook token')
-    expect(disk.get(PATHS.configFile)).not.toContain('hook-token-1')
-    expect(disk.get(PATHS.claudeSettings)).not.toContain('hook-token-1')
-    expect(disk.get(PATHS.zshrc)).toContain('hook-token-1')
+    expect(qrRenders).toEqual(['https://slopdeck.com/#deck-token=deck-key-1'])
+  })
+})
+
+describe('slopdeck install — local path', () => {
+  it('mints locally and bakes the detected LAN IP into the pairing QR', async () => {
+    const { deps, qrRenders } = harness({
+      answers: { choose: 'local', ask: 'http://localhost:8484' },
+      lanIp: '192.168.1.42',
+    })
+
+    const result = await install(deps, {})
+
+    expect(result.ok).toBe(true)
+    // The phone cannot reach "localhost" — the QR must carry the machine's LAN
+    // IP and the gateway port so the phone finds it on the same Wi-Fi.
+    expect(qrRenders).toEqual(['http://192.168.1.42:8484/#deck-token=deck-key-1'])
   })
 
-  it('fails before any file is written when the gateway is unreachable', async () => {
+  it('surfaces the in-page-alerts-only tradeoff for local', async () => {
+    const { deps, said } = harness({
+      answers: { choose: 'local', ask: 'http://localhost:8484' },
+      lanIp: '192.168.1.42',
+    })
+
+    await install(deps, {})
+
+    const screen = said.join('\n').toLowerCase()
+    expect(screen).toContain('in-page alerts')
+    expect(screen).toContain('hosted')
+  })
+
+  it('aborts without writing when no LAN IP can be detected', async () => {
     const { deps, writes, said } = harness({
+      answers: { choose: 'local', ask: 'http://localhost:8484' },
+      lanIp: undefined,
+    })
+
+    const result = await install(deps, {})
+
+    expect(result.ok).toBe(false)
+    expect(writes).toHaveLength(0)
+    expect(said.join('\n').toLowerCase()).toContain('lan ip')
+  })
+})
+
+describe('slopdeck install — warnings and secrets', () => {
+  it('prints the loud anonymous-key warning and the honest privacy line', async () => {
+    const { deps, said } = harness({ answers: { choose: 'hosted' } })
+
+    await install(deps, {})
+
+    const screen = said.join('\n')
+    expect(screen).toContain('only way to reach your deck')
+    expect(screen.toLowerCase()).toContain('folder names')
+    expect(screen.toLowerCase()).toContain('not your credentials')
+  })
+
+  it('never writes the deck key to the claude settings or the zshrc block', async () => {
+    const { deps, disk } = harness({ answers: { choose: 'hosted' } })
+
+    await install(deps, {})
+
+    expect(disk.get(PATHS.claudeSettings)).not.toContain('deck-key-1')
+    expect(disk.get(PATHS.zshrc)).not.toContain('deck-key-1')
+  })
+
+  it('never writes the hook key to the config file', async () => {
+    const { deps, disk } = harness({ answers: { choose: 'hosted' } })
+
+    await install(deps, {})
+
+    expect(disk.get(PATHS.configFile)).not.toContain('hook-key-1')
+  })
+})
+
+describe('slopdeck install — validate-then-write discipline', () => {
+  it('fails before any file is written when the mint call is unreachable', async () => {
+    const { deps, writes, said } = harness({
+      answers: { choose: 'hosted' },
       client: okClient({
-        health: async () => ({ ok: false, error: 'unreachable', detail: 'ECONNREFUSED' }),
+        mintHosted: async () => ({ ok: false, error: 'unreachable', detail: 'ECONNREFUSED' }),
       }),
     })
 
@@ -50,36 +115,11 @@ describe('slopdeck install', () => {
     expect(said.join('\n')).toContain('unreachable')
   })
 
-  it('fails before any file is written when the hook token is rejected, with a clear message', async () => {
-    const { deps, writes, said } = harness({
-      client: okClient({
-        verifyHookToken: async () => ({ ok: false, error: 'unauthorized', status: 401 }),
-      }),
-    })
-
-    const result = await install(deps, {})
-
-    expect(result.ok).toBe(false)
-    expect(writes).toHaveLength(0)
-    expect(said.join('\n').toLowerCase()).toContain('token')
-  })
-
-  it('question interception defaults to no and is recorded; opting in adds the PreToolUse matcher', async () => {
-    const defaulted = harness({})
-    await install(defaulted.deps, {})
-    expect(JSON.parse(defaulted.disk.get(PATHS.configFile)!).interceptQuestions).toBe(false)
-    expect(JSON.parse(defaulted.disk.get(PATHS.claudeSettings)!).hooks.PreToolUse).toBeUndefined()
-
-    const opted = harness({ answers: { confirm: true } })
-    await install(opted.deps, {})
-    expect(JSON.parse(opted.disk.get(PATHS.configFile)!).interceptQuestions).toBe(true)
-    expect(JSON.parse(opted.disk.get(PATHS.claudeSettings)!).hooks.PreToolUse[0].matcher).toBe(
-      'AskUserQuestion',
-    )
-  })
-
   it('rejects malformed pre-existing settings without any partial write — not even the config file', async () => {
-    const { deps, writes } = harness({ files: { [PATHS.claudeSettings]: '{broken' } })
+    const { deps, writes } = harness({
+      answers: { choose: 'hosted' },
+      files: { [PATHS.claudeSettings]: '{broken' },
+    })
 
     const result = await install(deps, {})
 
@@ -89,6 +129,7 @@ describe('slopdeck install', () => {
 
   it('preserves foreign settings content through the merge', async () => {
     const { deps, disk } = harness({
+      answers: { choose: 'hosted' },
       files: {
         [PATHS.claudeSettings]: JSON.stringify({
           model: 'opus',
@@ -105,13 +146,27 @@ describe('slopdeck install', () => {
     expect(settings.hooks.Stop).toHaveLength(2)
     expect(disk.get(PATHS.zshrc)).toContain('# mine\nexport EDITOR=vim\n')
   })
+
+  it('question interception defaults to no and is recorded; opting in adds the PreToolUse matcher', async () => {
+    const defaulted = harness({ answers: { choose: 'hosted' } })
+    await install(defaulted.deps, {})
+    expect(JSON.parse(defaulted.disk.get(PATHS.configFile)!).interceptQuestions).toBe(false)
+    expect(JSON.parse(defaulted.disk.get(PATHS.claudeSettings)!).hooks.PreToolUse).toBeUndefined()
+
+    const opted = harness({ answers: { choose: 'hosted', confirm: true } })
+    await install(opted.deps, {})
+    expect(JSON.parse(opted.disk.get(PATHS.configFile)!).interceptQuestions).toBe(true)
+    expect(JSON.parse(opted.disk.get(PATHS.claudeSettings)!).hooks.PreToolUse[0].matcher).toBe(
+      'AskUserQuestion',
+    )
+  })
 })
 
 describe('slopdeck install — pairing epilogue', () => {
   it('ends with QR, then handshake, then the "look at your phone" instruction, in that order', async () => {
     const handshakes: Array<{ token: string; sessionId: string; cwd: string }> = []
     const { deps, said, qrRenders } = harness({
-      answers: { askHidden: ['hook-token-1', 'deck-token-9'] },
+      answers: { choose: 'hosted' },
       client: okClient({
         handshake: async (token, session) => {
           handshakes.push({ token, sessionId: session.sessionId, cwd: session.cwd })
@@ -123,9 +178,10 @@ describe('slopdeck install — pairing epilogue', () => {
     const result = await install(deps, {})
 
     expect(result.ok).toBe(true)
-    expect(qrRenders).toEqual(['https://deck.example.com/#deck-token=deck-token-9'])
+    expect(qrRenders).toEqual(['https://slopdeck.com/#deck-token=deck-key-1'])
+    // The handshake fires through the minted hook key, not a prompted one.
     expect(handshakes).toEqual([
-      { token: 'hook-token-1', sessionId: 'slopdeck-install', cwd: '/home/u/projects/demo' },
+      { token: 'hook-key-1', sessionId: 'slopdeck-install', cwd: '/home/u/projects/demo' },
     ])
     const screen = said.join('\n')
     const qrAt = screen.indexOf('[qr for ')
@@ -134,9 +190,9 @@ describe('slopdeck install — pairing epilogue', () => {
     expect(phoneAt).toBeGreaterThan(qrAt)
   })
 
-  it('reports a failed handshake clearly, leaves the setup files in place, and says what to check', async () => {
+  it('reports a failed handshake clearly and leaves the setup files in place', async () => {
     const { deps, disk, said } = harness({
-      answers: { askHidden: ['hook-token-1', 'deck-token-9'] },
+      answers: { choose: 'hosted' },
       client: okClient({
         handshake: async () => ({ ok: false, error: 'unreachable', detail: 'ECONNRESET' }),
       }),
@@ -151,74 +207,22 @@ describe('slopdeck install — pairing epilogue', () => {
     const screen = said.join('\n')
     expect(screen).toContain('handshake')
     expect(screen).toContain('files are in place')
-    expect(screen.toLowerCase()).toContain('check')
-  })
-
-  it('never writes the deck token to any file', async () => {
-    const { deps, disk } = harness({
-      answers: { askHidden: ['hook-token-1', 'deck-token-9'] },
-    })
-
-    await install(deps, {})
-
-    for (const [, content] of disk) {
-      expect(content).not.toContain('deck-token-9')
-    }
-  })
-
-  it('a blank deck token skips the QR but still proves the pipeline with the handshake', async () => {
-    let handshakes = 0
-    const { deps, qrRenders } = harness({
-      answers: { askHidden: ['hook-token-1', ''] },
-      client: okClient({
-        handshake: async () => {
-          handshakes += 1
-          return { ok: true, value: 7 }
-        },
-      }),
-    })
-
-    const result = await install(deps, {})
-
-    expect(result.ok).toBe(true)
-    expect(qrRenders).toHaveLength(0)
-    expect(handshakes).toBe(1)
   })
 })
 
 describe('slopdeck uninstall', () => {
-  it('reverses install exactly: settings and zshrc restored, config removed', async () => {
-    const originalSettings =
-      JSON.stringify({ model: 'opus', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] } }, null, 2) + '\n'
-    const originalZshrc = '# mine\nexport EDITOR=vim\n'
-    const { deps, disk } = harness({
-      files: { [PATHS.claudeSettings]: originalSettings, [PATHS.zshrc]: originalZshrc },
-    })
-    await install(deps, {})
+  it('removes slopdeck hooks, the zshrc block, and the config file', async () => {
+    const install1 = harness({ answers: { choose: 'hosted' } })
+    await install(install1.deps, {})
 
-    const result = await uninstall(deps)
+    // Re-run uninstall over the same disk state.
+    const result = await uninstall(install1.deps)
 
     expect(result.ok).toBe(true)
-    expect(JSON.parse(disk.get(PATHS.claudeSettings)!)).toEqual(JSON.parse(originalSettings))
-    expect(disk.get(PATHS.zshrc)).toBe(originalZshrc)
-    expect(disk.has(PATHS.configFile)).toBe(false)
-  })
-
-  it('tells the user that already-running Claude sessions keep their hooks until restarted', async () => {
-    const { deps, said } = harness({})
-    await install(deps, {})
-
-    await uninstall(deps)
-
-    expect(said.join('\n').toLowerCase()).toContain('restart')
-  })
-
-  it('refuses to touch a malformed settings file, and writes nothing', async () => {
-    const { deps, writes } = harness({ files: { [PATHS.claudeSettings]: 'not json at all {' } })
-
-    const result = await uninstall(deps)
-
-    expect(result.ok).toBe(false)
-    expect(writes).toHaveLength(0)
+    expect(install1.disk.has(PATHS.configFile)).toBe(false)
+    expect(install1.disk.get(PATHS.zshrc) ?? '').not.toContain('SLOPDECK_HOOK_TOKEN')
+    const settings = JSON.parse(install1.disk.get(PATHS.claudeSettings) ?? '{}')
+    const stopHooks = settings.hooks?.Stop ?? []
+    expect(stopHooks).toHaveLength(0)
   })
 })

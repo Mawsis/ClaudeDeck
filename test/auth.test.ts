@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import type { AppEnv } from '../src/gateway/app.ts'
-import { requireWorkspace } from '../src/gateway/auth.ts'
+import { requireAnyKey, requireWorkspace } from '../src/gateway/auth.ts'
 import { createWorkspaceStore } from '../src/gateway/workspace-store.ts'
 
 /**
@@ -87,5 +87,65 @@ describe('requireWorkspace', () => {
     expect(await asA.json()).toEqual({ workspaceId: a.workspaceId })
     expect(await asB.json()).toEqual({ workspaceId: b.workspaceId })
     expect(a.workspaceId).not.toBe(b.workspaceId)
+  })
+})
+
+describe('requireAnyKey', () => {
+  function anyKeyApp(store = createWorkspaceStore()) {
+    const app = new Hono<AppEnv>()
+    // Rotation-style gate: either scope proves ownership.
+    app.post('/any', requireAnyKey(store), (c) => c.json({ workspaceId: c.get('workspaceId') }))
+    return { app, store }
+  }
+
+  it('admits the deck key AND the hook key — either proves ownership, no wrong-door', async () => {
+    const { app, store } = anyKeyApp()
+    const { workspaceId, hookKey, deckKey } = store.createWorkspace()
+
+    for (const key of [hookKey, deckKey]) {
+      const response = await app.request('/any', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}` },
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ workspaceId })
+    }
+  })
+
+  it('rejects an unknown key with 401', async () => {
+    const { app, store } = anyKeyApp()
+    store.createWorkspace()
+
+    const response = await app.request('/any', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer 0000000000000000000000000000000000000000000000000000000000000000' },
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it('rejects an empty Bearer token and a non-Bearer Authorization header with 401', async () => {
+    const { app } = anyKeyApp()
+
+    const emptyBearer = await app.request('/any', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' },
+    })
+    const nonBearer = await app.request('/any', {
+      method: 'POST',
+      headers: { Authorization: 'Basic dXNlcjpwYXNz' },
+    })
+
+    expect(emptyBearer.status).toBe(401)
+    expect(nonBearer.status).toBe(401)
+  })
+
+  it('does not accept a ?token= query fallback — rotation is header-only', async () => {
+    const { app, store } = anyKeyApp()
+    const { deckKey } = store.createWorkspace()
+
+    const response = await app.request(`/any?token=${deckKey}`, { method: 'POST' })
+
+    expect(response.status).toBe(401)
   })
 })

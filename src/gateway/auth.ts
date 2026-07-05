@@ -68,3 +68,22 @@ export function requireWorkspace(scope: TokenScope, store: ScopeResolver): Middl
     return next()
   }
 }
+
+/**
+ * Scope-agnostic gate for operations where holding *either* of a workspace's
+ * keys is the proof of ownership — rotation, above all. Any valid key (hook or
+ * deck, Bearer header only) resolves and stashes its workspace id; anything else
+ * is a 401. There is no wrong-door here by design: both keys are the same
+ * workspace's, so neither is "the wrong scope" for proving you own it.
+ */
+export function requireAnyKey(store: ScopeResolver): MiddlewareHandler {
+  return async (c, next) => {
+    const header = c.req.header('Authorization')
+    const presented = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined
+    if (presented === undefined) return c.json({ error: 'missing token' }, 401)
+    const identity = store.authenticateScoped(presented)
+    if (identity === null) return c.json({ error: 'invalid token' }, 401)
+    c.set('workspaceId', identity.workspaceId)
+    return next()
+  }
+}

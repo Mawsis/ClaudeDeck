@@ -14,10 +14,14 @@ describe('CLI argument parsing', () => {
     expect(parseCliArgs(['uninstall'])).toEqual({ command: 'uninstall', gatewayUrl: undefined })
   })
 
-  it('parses the remote-control and pairing commands: on, off, status, qr', () => {
-    for (const command of ['on', 'off', 'status', 'qr'] as const) {
+  it('parses the remote-control and pairing commands: on, off, status, qr, rotate', () => {
+    for (const command of ['on', 'off', 'status', 'qr', 'rotate'] as const) {
       expect(parseCliArgs([command])).toEqual({ command, gatewayUrl: undefined })
     }
+  })
+
+  it('never accepts a key via argv on rotate — an extra argument is a usage error', () => {
+    expect(parseCliArgs(['rotate', 'some-key'])).toBeNull()
   })
 
   it('never accepts a token via argv — an unexpected extra argument is a usage error', () => {

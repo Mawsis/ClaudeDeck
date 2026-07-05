@@ -9,6 +9,9 @@ import type { FileStore } from './install.ts'
 export type CliConfig = {
   readonly gatewayUrl: string
   readonly interceptQuestions: boolean
+  /** The workspace's deck key — the phone-pairing credential and rotate proof.
+   * Absent on a config written before workspaces (env-token compat). */
+  readonly deckKey: string | undefined
 }
 
 export type CliConfigResult =
@@ -33,6 +36,9 @@ export async function readCliConfig(files: FileStore, configFile: string): Promi
   if (typeof gatewayUrl !== 'string' || gatewayUrl === '') {
     return { ok: false, error: `config at ${configFile} is malformed — re-run \`slopdeck install\`` }
   }
-  const interceptQuestions = (parsed as Record<string, unknown>).interceptQuestions === true
-  return { ok: true, config: { gatewayUrl, interceptQuestions } }
+  const record = parsed as Record<string, unknown>
+  const interceptQuestions = record.interceptQuestions === true
+  const rawDeckKey = record.deckKey
+  const deckKey = typeof rawDeckKey === 'string' && rawDeckKey !== '' ? rawDeckKey : undefined
+  return { ok: true, config: { gatewayUrl, interceptQuestions, deckKey } }
 }
