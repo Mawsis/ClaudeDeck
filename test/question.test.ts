@@ -73,6 +73,32 @@ describe('question hold contract', () => {
     })
   })
 
+  it('clears the deck card when the hook request aborts — the question was answered at the terminal', async () => {
+    const { app } = buildApp()
+    const deck = await openDeck(app)
+
+    // Same race as permissions: Claude renders the question in the terminal too,
+    // and answering there aborts the in-flight hook request. The gateway must
+    // notice and tell the deck the card is done, or it stays stuck on an
+    // already-answered question.
+    const controller = new AbortController()
+    const hookResponse = app.request('/api/question', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${HOOK_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(questionPayload()),
+      signal: controller.signal,
+    })
+
+    const frames = await deck.readUntil('event: question')
+    const promptId = /"promptId":"([^"]+)"/.exec(frames)![1]!
+
+    controller.abort()
+    await Promise.resolve(hookResponse).catch(() => {})
+
+    const resolved = await deck.readUntil('event: question-resolved')
+    expect(resolved).toContain(`"promptId":"${promptId}"`)
+  })
+
   it('streams the question with tappable options to a connected deck, then answers the held hook with deny-carrying the tapped choice', async () => {
     const { app } = buildApp()
     const deck = await openDeck(app)

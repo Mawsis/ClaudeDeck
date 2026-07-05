@@ -58,7 +58,7 @@ export type CliDeps = {
 export type CliOutcome = { readonly ok: boolean }
 
 /** The default hosted gateway — the author's always-on backend. */
-export const HOSTED_GATEWAY_URL = 'https://slopdeck.com'
+export const HOSTED_GATEWAY_URL = 'https://slopdeck.mawsis.dev'
 
 const LOCAL = 'local'
 const HOSTED = 'hosted'

@@ -70,7 +70,23 @@ the hack — run `npm run canary` after upgrading Claude Code (needs working
 credentials, consumes tokens); if it reports the session ignored the deny
 reason, disable question interception until revalidated.
 
-## The walkable path
+## Quick start (use the hosted deck)
+
+Don't want to run a server? Use the always-on hosted gateway. One command on
+your workstation — no clone, no tokens, no `.env`:
+
+```bash
+npx github:Mawsis/ClaudeDeck slopdeck install
+```
+
+Pick **hosted** when asked, and scan the QR with your phone. That's it — the
+deck pairs over HTTPS and works from anywhere. Requires **Node ≥ 22.6** and
+[Claude Code](https://claude.com/claude-code) already set up on the machine.
+
+To self-host the gateway instead (your own VPS, full privacy), follow the
+walkable path below.
+
+## The walkable path (self-hosted)
 
 Four steps: deploy the gateway → wire the workstation → scan the QR → dock
 the phone.
