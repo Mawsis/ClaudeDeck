@@ -29,10 +29,21 @@ describe('CLI argument parsing', () => {
     expect(parseCliArgs(['qr', '--deck-token', 'x'])).toBeNull()
   })
 
-  it('rejects unknown or missing commands and a dangling flag', () => {
-    expect(parseCliArgs([])).toBeNull()
+  it('defaults to install when no subcommand is given', () => {
+    // A bare invocation installs — the natural first action, and the fallback
+    // for `npx <spec> slopdeck install` forms that drop the trailing arg.
+    expect(parseCliArgs([])).toEqual({ command: 'install', gatewayUrl: undefined })
+    // A leading flag with no subcommand is still an install, carrying the flag.
+    expect(parseCliArgs(['--gateway-url', 'https://d.example.com'])).toEqual({
+      command: 'install',
+      gatewayUrl: 'https://d.example.com',
+    })
+  })
+
+  it('rejects unknown commands and a dangling flag', () => {
     expect(parseCliArgs(['frobnicate'])).toBeNull()
     expect(parseCliArgs(['install', '--gateway-url'])).toBeNull()
     expect(parseCliArgs(['install', '--gateway-url', '--other'])).toBeNull()
+    expect(parseCliArgs(['--gateway-url'])).toBeNull()
   })
 })

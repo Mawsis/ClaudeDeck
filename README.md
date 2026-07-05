@@ -76,12 +76,17 @@ Don't want to run a server? Use the always-on hosted gateway. One command on
 your workstation — no clone, no tokens, no `.env`:
 
 ```bash
-npx github:Mawsis/ClaudeDeck slopdeck install
+npx -p github:Mawsis/ClaudeDeck slopdeck install
 ```
 
 Pick **hosted** when asked, and scan the QR with your phone. That's it — the
 deck pairs over HTTPS and works from anywhere. Requires **Node ≥ 22.6** and
 [Claude Code](https://claude.com/claude-code) already set up on the machine.
+
+> The `-p` (install the package, then run its `slopdeck` command) form is the
+> reliable one — a bare `npx github:… slopdeck install` can drop the `install`
+> arg. If it ever does, the CLI defaults to `install` anyway, so you land in the
+> same place.
 
 To self-host the gateway instead (your own VPS, full privacy), follow the
 walkable path below.
