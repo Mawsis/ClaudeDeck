@@ -4,9 +4,14 @@ import { setInterception, status } from '../src/cli/remote.ts'
 import { addHookSettings } from '../src/cli/settings-surgeon.ts'
 import { configFileContent, harness, okClient, PATHS } from './cli-harness.ts'
 
-/** Claude settings content exactly as `slopdeck install` leaves it. */
+/** Claude settings content exactly as `slopdeck install` leaves it — hooks plus
+ * the hook token in the env block. */
 function installedSettings(): string {
-  const surgery = addHookSettings('', generateHookSettings({ gatewayUrl: 'https://deck.example.com' }))
+  const surgery = addHookSettings(
+    '',
+    generateHookSettings({ gatewayUrl: 'https://deck.example.com' }),
+    'hook-key-1',
+  )
   if (!surgery.ok) throw new Error('fixture: settings surgery failed')
   return surgery.content
 }
@@ -112,7 +117,8 @@ describe('slopdeck status', () => {
         [PATHS.configFile]: configFileContent('https://deck.example.com', 'deck-key-9'),
         [PATHS.claudeSettings]: installedSettings(),
       },
-      env: { SLOPDECK_HOOK_TOKEN: 'hook-token-1' },
+      // No shell env needed — the token is read from the settings env block now.
+      env: {},
       client: okClient({ getPaused: async () => ({ ok: true, value: false }) }),
     })
 
@@ -125,7 +131,7 @@ describe('slopdeck status', () => {
     expect(screen).toContain('config')
     expect(screen).toContain('https://deck.example.com')
     expect(screen).toContain('hooks installed')
-    expect(screen).toContain('SLOPDECK_HOOK_TOKEN visible in this shell')
+    expect(screen).toContain('SLOPDECK_HOOK_TOKEN set in Claude settings')
     expect(screen).toContain('gateway reachable')
     expect(screen).toContain('hook token accepted')
     // The deck side of the workspace chain resolves too.
@@ -135,29 +141,33 @@ describe('slopdeck status', () => {
 })
 
 describe('slopdeck status — single-link failures stay identifiable', () => {
-  it('distinguishes "env var missing in this shell" from "token rejected by gateway"', async () => {
+  it('distinguishes "token missing from settings" from "token rejected by gateway"', async () => {
+    // Settings with hooks but NO env token — the token link is missing.
+    const settingsNoToken = JSON.stringify(
+      JSON.parse(installedSettings()),
+      (key, value) => (key === 'env' ? undefined : value),
+    )
     const missingEnv = harness({
-      files: { [PATHS.configFile]: configFileContent(), [PATHS.claudeSettings]: installedSettings() },
+      files: { [PATHS.configFile]: configFileContent(), [PATHS.claudeSettings]: settingsNoToken },
       env: {},
-      answers: { askHidden: '' },
     })
     expect((await status(missingEnv.deps)).ok).toBe(false)
     const missingScreen = missingEnv.said.join('\n')
-    expect(missingScreen).toContain('SLOPDECK_HOOK_TOKEN missing in this shell')
-    expect(missingScreen).toContain('hook token check skipped (SLOPDECK_HOOK_TOKEN missing in this shell)')
+    expect(missingScreen).toContain('SLOPDECK_HOOK_TOKEN missing')
+    expect(missingScreen).toContain('hook token check skipped')
     expect(missingScreen).not.toContain('rejected')
 
+    // Token present in settings, but the gateway rejects it (stale/rotated key).
     const rejected = harness({
       files: { [PATHS.configFile]: configFileContent(), [PATHS.claudeSettings]: installedSettings() },
-      env: { SLOPDECK_HOOK_TOKEN: 'stale-token' },
-      answers: { askHidden: '' },
+      env: {},
       client: okClient({
         verifyHookToken: async () => ({ ok: false, error: 'unauthorized', status: 401 }),
       }),
     })
     expect((await status(rejected.deps)).ok).toBe(false)
     const rejectedScreen = rejected.said.join('\n')
-    expect(rejectedScreen).toContain('SLOPDECK_HOOK_TOKEN visible in this shell')
+    expect(rejectedScreen).toContain('SLOPDECK_HOOK_TOKEN set in Claude settings')
     expect(rejectedScreen).toContain('hook token rejected by the gateway')
   })
 

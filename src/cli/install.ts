@@ -3,7 +3,6 @@ import type { GatewayClient } from './gateway-client.ts'
 import { pairingUrl, phoneReachableBase } from './pairing.ts'
 import {
   addHookSettings,
-  addZshrcBlock,
   removeHookSettings,
   removeZshrcBlock,
 } from './settings-surgeon.ts'
@@ -121,25 +120,27 @@ export async function install(
   const surgery = addHookSettings(
     settingsBefore,
     generateHookSettings({ gatewayUrl, interceptQuestions }),
+    // The hook token now rides in the settings `env` block, which Claude Code
+    // injects into hook execution on every OS. The old .zshrc export only
+    // worked on Unix shells — Windows hooks got no token and 401'd.
+    hookKey,
   )
   if (!surgery.ok) {
     io.say(`refusing to touch ${paths.claudeSettings}: ${surgery.error}`)
     return { ok: false }
   }
-  const zshrcBefore = (await files.read(paths.zshrc)) ?? ''
 
   await files.write(
     paths.configFile,
     // The deck key is stored here — it is the phone-pairing credential and the
     // proof `rotate` presents. The hook key is deliberately absent: it lives
-    // only in the marked .zshrc block, where Claude Code's env interpolation
-    // picks it up.
+    // in the settings `env` block, where Claude Code's hook interpolation picks
+    // it up cross-platform.
     JSON.stringify({ gatewayUrl, interceptQuestions, deckKey }, null, 2) + '\n',
   )
   await files.write(paths.claudeSettings, surgery.content)
-  await files.write(paths.zshrc, addZshrcBlock(zshrcBefore, hookKey))
 
-  io.say('slopdeck installed — open a new shell so the hook key is exported')
+  io.say('slopdeck installed — the hook token is set in Claude settings (no shell restart needed)')
 
   // The pairing finale: QR for the phone, the honest privacy line, the loud
   // key warning, then a handshake through the real hook-auth path — one moment

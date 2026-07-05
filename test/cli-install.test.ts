@@ -13,8 +13,11 @@ describe('slopdeck install — hosted path', () => {
     expect(hiddenPrompts).toHaveLength(0)
     const config = JSON.parse(disk.get(PATHS.configFile)!)
     expect(config.gatewayUrl).toBe('https://slopdeck.mawsis.dev')
-    // The minted hook key lands in the zshrc block; the deck key in config.
-    expect(disk.get(PATHS.zshrc)).toContain("export SLOPDECK_HOOK_TOKEN='hook-key-1'")
+    // The minted hook key lands in the Claude settings env block (cross-platform,
+    // read by hooks on every OS); the deck key in config. No .zshrc write.
+    const settings = JSON.parse(disk.get(PATHS.claudeSettings)!)
+    expect(settings.env.SLOPDECK_HOOK_TOKEN).toBe('hook-key-1')
+    expect(disk.has(PATHS.zshrc)).toBe(false)
     expect(config.deckKey).toBe('deck-key-1')
   })
 
@@ -81,13 +84,15 @@ describe('slopdeck install — warnings and secrets', () => {
     expect(screen.toLowerCase()).toContain('not your credentials')
   })
 
-  it('never writes the deck key to the claude settings or the zshrc block', async () => {
+  it('never writes the deck key to the claude settings — only the hook key belongs there', async () => {
     const { deps, disk } = harness({ answers: { choose: 'hosted' } })
 
     await install(deps, {})
 
+    // The hook key goes in settings env; the deck key never does — it is the
+    // phone-pairing credential and lives only in the config file.
     expect(disk.get(PATHS.claudeSettings)).not.toContain('deck-key-1')
-    expect(disk.get(PATHS.zshrc)).not.toContain('deck-key-1')
+    expect(disk.has(PATHS.zshrc)).toBe(false)
   })
 
   it('never writes the hook key to the config file', async () => {
@@ -203,7 +208,9 @@ describe('slopdeck install — pairing epilogue', () => {
     expect(result.ok).toBe(false)
     expect(disk.has(PATHS.configFile)).toBe(true)
     expect(disk.has(PATHS.claudeSettings)).toBe(true)
-    expect(disk.has(PATHS.zshrc)).toBe(true)
+    // The hook token lives in settings now (not .zshrc); it survives a failed
+    // handshake so a retry doesn't need a fresh mint.
+    expect(JSON.parse(disk.get(PATHS.claudeSettings)!).env.SLOPDECK_HOOK_TOKEN).toBe('hook-key-1')
     const screen = said.join('\n')
     expect(screen).toContain('handshake')
     expect(screen).toContain('files are in place')
@@ -211,7 +218,7 @@ describe('slopdeck install — pairing epilogue', () => {
 })
 
 describe('slopdeck uninstall', () => {
-  it('removes slopdeck hooks, the zshrc block, and the config file', async () => {
+  it('removes slopdeck hooks, the env token, and the config file', async () => {
     const install1 = harness({ answers: { choose: 'hosted' } })
     await install(install1.deps, {})
 
@@ -220,9 +227,10 @@ describe('slopdeck uninstall', () => {
 
     expect(result.ok).toBe(true)
     expect(install1.disk.has(PATHS.configFile)).toBe(false)
-    expect(install1.disk.get(PATHS.zshrc) ?? '').not.toContain('SLOPDECK_HOOK_TOKEN')
     const settings = JSON.parse(install1.disk.get(PATHS.claudeSettings) ?? '{}')
     const stopHooks = settings.hooks?.Stop ?? []
     expect(stopHooks).toHaveLength(0)
+    // The token is gone from the settings env block too.
+    expect(settings.env?.SLOPDECK_HOOK_TOKEN).toBeUndefined()
   })
 })

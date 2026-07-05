@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { generateHookSettings } from '../src/config-generator/generate.ts'
+import { generateHookSettings, HOOK_TOKEN_ENV_VAR } from '../src/config-generator/generate.ts'
 import {
   addHookSettings,
   addZshrcBlock,
+  hookTokenFromSettings,
   removeHookSettings,
   removeZshrcBlock,
+  setHookToken,
 } from '../src/cli/settings-surgeon.ts'
 
 const GATEWAY = 'https://deck.example.com'
 const slopdeckHooks = generateHookSettings({ gatewayUrl: GATEWAY })
+const TOKEN = 'hook-token-abc123'
 
 describe('Claude settings surgery', () => {
   it('installs the hook block into an empty settings file', () => {
-    const result = addHookSettings('', slopdeckHooks)
+    const result = addHookSettings('', slopdeckHooks, TOKEN)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -31,7 +34,7 @@ describe('Claude settings surgery', () => {
       },
     })
 
-    const result = addHookSettings(existing, slopdeckHooks)
+    const result = addHookSettings(existing, slopdeckHooks, TOKEN)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -44,10 +47,10 @@ describe('Claude settings surgery', () => {
   })
 
   it('is idempotent: re-installing (even against a different gateway) replaces, never stacks', () => {
-    const first = addHookSettings('', generateHookSettings({ gatewayUrl: 'https://old.example.com' }))
+    const first = addHookSettings('', generateHookSettings({ gatewayUrl: 'https://old.example.com' }), TOKEN)
     if (!first.ok) throw new Error('unreachable')
 
-    const second = addHookSettings(first.content, slopdeckHooks)
+    const second = addHookSettings(first.content, slopdeckHooks, TOKEN)
 
     expect(second.ok).toBe(true)
     if (!second.ok) return
@@ -63,7 +66,7 @@ describe('Claude settings surgery', () => {
         Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }],
       },
     })
-    const installed = addHookSettings(existing, slopdeckHooks)
+    const installed = addHookSettings(existing, slopdeckHooks, TOKEN)
     if (!installed.ok) throw new Error('unreachable')
 
     const removed = removeHookSettings(installed.content)
@@ -97,7 +100,7 @@ describe('Claude settings surgery', () => {
       }
       const original = JSON.stringify(foreign)
 
-      const installed = addHookSettings(original, slopdeckHooks)
+      const installed = addHookSettings(original, slopdeckHooks, TOKEN)
       expect(installed.ok).toBe(true)
       if (!installed.ok) return
       const removed = removeHookSettings(installed.content)
@@ -119,10 +122,66 @@ describe('Claude settings surgery', () => {
   })
 
   it('rejects malformed settings JSON with a typed error — never a partial rewrite', () => {
-    expect(addHookSettings('{not json', slopdeckHooks).ok).toBe(false)
+    expect(addHookSettings('{not json', slopdeckHooks, TOKEN).ok).toBe(false)
     expect(removeHookSettings('{not json').ok).toBe(false)
-    expect(addHookSettings('[1,2,3]', slopdeckHooks).ok).toBe(false)
-    expect(addHookSettings('"just a string"', slopdeckHooks).ok).toBe(false)
+    expect(addHookSettings('[1,2,3]', slopdeckHooks, TOKEN).ok).toBe(false)
+    expect(addHookSettings('"just a string"', slopdeckHooks, TOKEN).ok).toBe(false)
+  })
+})
+
+describe('hook token in the settings env block (cross-platform)', () => {
+  it('writes the token into env so Claude Code injects it into hooks on every OS', () => {
+    const result = addHookSettings('', slopdeckHooks, TOKEN)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const parsed = JSON.parse(result.content)
+    expect(parsed.env[HOOK_TOKEN_ENV_VAR]).toBe(TOKEN)
+    expect(hookTokenFromSettings(result.content)).toBe(TOKEN)
+  })
+
+  it('preserves foreign env vars while setting the token', () => {
+    const existing = JSON.stringify({ env: { FOO: 'bar' } })
+    const result = addHookSettings(existing, slopdeckHooks, TOKEN)
+    if (!result.ok) throw new Error('unreachable')
+    const parsed = JSON.parse(result.content)
+    expect(parsed.env.FOO).toBe('bar')
+    expect(parsed.env[HOOK_TOKEN_ENV_VAR]).toBe(TOKEN)
+  })
+
+  it('uninstall strips the slopdeck token but leaves foreign env vars', () => {
+    const existing = JSON.stringify({ env: { FOO: 'bar' } })
+    const installed = addHookSettings(existing, slopdeckHooks, TOKEN)
+    if (!installed.ok) throw new Error('unreachable')
+    const removed = removeHookSettings(installed.content)
+    if (!removed.ok) throw new Error('unreachable')
+    const parsed = JSON.parse(removed.content)
+    expect(parsed.env).toEqual({ FOO: 'bar' })
+    expect(hookTokenFromSettings(removed.content)).toBeUndefined()
+  })
+
+  it('drops the env key entirely when the slopdeck token was its only entry', () => {
+    const installed = addHookSettings('', slopdeckHooks, TOKEN)
+    if (!installed.ok) throw new Error('unreachable')
+    const removed = removeHookSettings(installed.content)
+    if (!removed.ok) throw new Error('unreachable')
+    expect(JSON.parse(removed.content).env).toBeUndefined()
+  })
+
+  it('setHookToken re-keys the token in place without touching hooks (rotate)', () => {
+    const installed = addHookSettings('', slopdeckHooks, TOKEN)
+    if (!installed.ok) throw new Error('unreachable')
+    const rotated = setHookToken(installed.content, 'fresh-token-xyz')
+    if (!rotated.ok) throw new Error('unreachable')
+    const parsed = JSON.parse(rotated.content)
+    expect(parsed.env[HOOK_TOKEN_ENV_VAR]).toBe('fresh-token-xyz')
+    // Hooks are untouched by a token rotation.
+    expect(parsed.hooks.Stop).toHaveLength(1)
+  })
+
+  it('hookTokenFromSettings returns undefined when no token is present or content is malformed', () => {
+    expect(hookTokenFromSettings('{}')).toBeUndefined()
+    expect(hookTokenFromSettings('{not json')).toBeUndefined()
+    expect(hookTokenFromSettings(JSON.stringify({ env: { FOO: 'bar' } }))).toBeUndefined()
   })
 })
 
