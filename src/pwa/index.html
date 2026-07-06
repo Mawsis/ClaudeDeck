@@ -233,7 +233,7 @@
   }
   #bubble {
     position: relative; /* anchors the tail and the top-right project tag */
-    flex: 1; box-sizing: border-box;
+    flex: 1; min-width: 0; box-sizing: border-box;
     display: flex; align-items: center;
     padding: 0 3vmin;
     border: 2px solid var(--dim); border-radius: 0;
@@ -263,7 +263,10 @@
   /* Single line, fixed height: the content clamps with an ellipsis rather than
      wrapping or growing the box. VT323 (D13) — a display line, not a payload. */
   #bubble-line {
-    flex: 1;
+    /* min-width:0 is load-bearing: a flex item defaults to min-width:auto, which
+       refuses to shrink below its content's intrinsic width — so nowrap text
+       blows the box past the viewport and overflow/ellipsis never engage. */
+    flex: 1; min-width: 0;
     font-family: 'VT323', ui-monospace, Menlo, monospace;
     font-size: 4vmin; line-height: 1.4; color: var(--dim); opacity: 0.9;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -1084,6 +1087,10 @@
   const fromFragment = fragmentToken(location.hash)
   if (fromFragment !== null) {
     history.replaceState(null, '', location.pathname + location.search)
+    // A freshly scanned QR always wins: overwrite whatever token was stored,
+    // even if the deck had an old one saved. The fragment is the user's
+    // explicit "pair with this workspace now", so it clobbers the old code.
+    localStorage.removeItem(TOKEN_KEY)
     localStorage.setItem(TOKEN_KEY, fromFragment)
     connect(fromFragment)
   } else {
