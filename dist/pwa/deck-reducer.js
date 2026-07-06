@@ -172,47 +172,6 @@ export function localEventTime(frame, receiptNow) {
     return receiptNow - age;
 }
 /**
- * @typedef {{ key: string, tool: string, detail: string, risk: 'highlighted' | 'routine', at: number }} TickerRow
- */
-/** @type {readonly TickerRow[]} */
-export const initialTicker = Object.freeze([]);
-// A desk-clock strip shows a handful of rows; 20 covers a taller layout
-// while keeping the always-on DOM small.
-const TICKER_CAPACITY = 20;
-/**
- * @param {readonly TickerRow[]} ticker newest row first
- * @param {{ type: string, id: number, at: number, bootId?: string, sessionId?: string,
- *   title?: string, tool?: string, detail?: string, risk?: string }} event a deck SSE
- *   frame — external JSON, so tool fields are normalized here rather than trusted.
- * @returns {readonly TickerRow[]}
- */
-export function reduceTicker(ticker, event) {
-    if (event.type !== 'tool' && event.type !== 'handshake')
-        return ticker;
-    // Reconnect replay is at-least-once; the audit strip must stay exactly-once.
-    // Keyed by (bootId, id): a restarted gateway reuses ids from 1, and those
-    // collisions are new events, not duplicates.
-    const key = `${event.bootId ?? ''}:${event.id}`;
-    if (ticker.some((row) => row.key === key))
-        return ticker;
-    const row = event.type === 'handshake'
-        ? // The install's proof-of-pipeline ping — an ordinary highlighted row,
-            // no dedicated UI state.
-            { key, tool: 'slopdeck', detail: 'install verified', risk: /** @type {const} */ ('highlighted'), at: event.at }
-        : {
-            key,
-            tool: String(event.tool ?? ''),
-            detail: String(event.detail ?? ''),
-            // The strip renders two tiers; `high` (D15's long-hold tier) is above
-            // `highlighted`, so it must never fall through to a dim routine row.
-            risk: event.risk === 'highlighted' || event.risk === 'high'
-                ? /** @type {const} */ ('highlighted')
-                : /** @type {const} */ ('routine'),
-            at: event.at,
-        };
-    return [row, ...ticker].slice(0, TICKER_CAPACITY);
-}
-/**
  * @typedef {{ kind: 'permission', promptId: string, sessionId: string, title: string,
  *   tool: string, detail: string, risk: 'high' | 'routine' }} PermissionCard
  * @typedef {{ question: string, header: string, options: readonly string[],
@@ -433,6 +392,29 @@ export function clawdPose(view, promptPending = false, waving = false) {
     if (view.mode === 'done')
         return 'waving';
     return 'sleeping';
+}
+/**
+ * The speech bubble's lifetime, derived from the mascot's pose — the single
+ * source of truth, not a timer or a Stop event. Clawd speaks exactly while he
+ * types (a session is running); any other pose (waving, sleeping, alarmed,
+ * paused, offline) clears the bubble in the same beat the pose changes.
+ *
+ * @param {ClawdPose} pose
+ * @returns {boolean}
+ */
+export function bubbleVisible(pose) {
+    return pose === 'typing';
+}
+/**
+ * The centered SLOPDECK title steps aside while the bubble speaks and returns
+ * when the deck is at rest — the exact inverse of the bubble, so the two can
+ * never both own the top of the deck.
+ *
+ * @param {ClawdPose} pose
+ * @returns {boolean}
+ */
+export function titleVisible(pose) {
+    return !bubbleVisible(pose);
 }
 /**
  * @typedef {{ mode: DeckView['mode'], paused: boolean, promptPending: boolean }} DeckSignature

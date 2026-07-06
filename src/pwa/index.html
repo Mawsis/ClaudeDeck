@@ -204,28 +204,82 @@
     100% { opacity: 0; background-position-y: 100vh; }
   }
 
-  /* Activity ticker (D7, D16): bottom strip, VT323 (D13), newest row first.
-     Rows stay ambient-dim; highlighted actions use the ambient accent — full
-     saturation remains reserved for transition moments. */
-  #ticker {
-    position: fixed; left: 2vmin; right: 2vmin; bottom: 6vmin;
-    margin: 0; padding: 0; list-style: none;
-    max-height: 13vmin; overflow: hidden;
+  /* D7/D16: Clawd's speech bubble — a fixed-height single-line box beside the
+     mascot, above the clock, as if Clawd is speaking. It replaces the old
+     bottom ticker strip (removed, along with the overflow it caused). This
+     slice scaffolds the box and wires its visibility; content lands later.
+
+     The mascot and bubble share one horizontal row so the bubble literally
+     sits at Clawd's right and drifts with him under the burn-in shift — no
+     fixed positioning to desync from the mascot. The row is a fixed height
+     (the mascot's), and the bubble is a single line, so bubble content never
+     reflows the clock stack below. Empty in this slice; hidden entirely unless
+     the pose is typing (`.hidden` toggled by the render tick), so a resting
+     deck carries no ghost chrome. */
+  /* The row spans the clock's width so the bubble's right edge lines up with the
+     digits' right edge, and its height is exactly the mascot's — so the bubble
+     top sits at the mascot's crown and its bottom at the mascot's foot, never
+     dropping into the clock below. The bubble flexes to fill whatever the mascot
+     leaves, reading as a big panel Clawd is speaking. margin-bottom opens a gap
+     to the digits so nothing overlaps. */
+  #mascot-row {
+    display: flex; align-items: stretch; gap: 4.5vmin;
+    width: 78vw; max-width: 144vmin; height: 14vmin; margin-bottom: 3vmin;
+  }
+  #bubble {
+    position: relative; /* anchors the tail and the top-right project tag */
+    flex: 1; box-sizing: border-box;
+    display: flex; align-items: center;
+    padding: 0 3vmin;
+    border: 2px solid var(--dim); border-radius: 0;
+    background: var(--bg);
+  }
+  /* The speech-bubble tail: a pixel-art notch on the bubble's left edge pointing
+     at Clawd's mouth — this is what says "the mascot is speaking," not just a
+     box. Two stacked triangles keep the hard 2px border continuous: the outer
+     one is border-colored, the inner one (offset by the border width) punches
+     the --bg fill back out, leaving a bordered arrow. */
+  #bubble::before, #bubble::after {
+    content: ''; position: absolute; right: 100%; top: 50%;
+    width: 0; height: 0; border-style: solid;
+  }
+  #bubble::before {
+    /* outer triangle = the border edge of the tail */
+    margin-top: -1.7vmin;
+    border-width: 1.7vmin 1.9vmin 1.7vmin 0;
+    border-color: transparent var(--dim) transparent transparent;
+  }
+  #bubble::after {
+    /* inner triangle = the --bg fill, pulled 2px inside the outer edge */
+    margin-top: -1.4vmin;
+    border-width: 1.4vmin 1.6vmin 1.4vmin 0;
+    border-color: transparent var(--bg) transparent transparent;
+  }
+  /* Single line, fixed height: the content clamps with an ellipsis rather than
+     wrapping or growing the box. VT323 (D13) — a display line, not a payload. */
+  #bubble-line {
+    flex: 1;
     font-family: 'VT323', ui-monospace, Menlo, monospace;
-    font-size: 3vmin; line-height: 1.4; text-align: left;
-    transition: transform 1.2s ease;
-  }
-  #ticker li {
-    color: var(--dim); opacity: 0.5;
+    font-size: 4vmin; line-height: 1.4; color: var(--dim); opacity: 0.9;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    animation: ticker-in 150ms ease-out;
+    min-height: 1.4em;
   }
-  #ticker li[data-risk='highlighted'] { color: var(--accent-ambient); opacity: 0.95; }
-  body[data-mode='offline'] #ticker li { color: var(--offline); }
-  /* D17: one slide-in under 150ms per row, then stillness. */
-  @keyframes ticker-in {
-    from { transform: translateY(-0.5em); opacity: 0; }
+  /* The project tag is pinned to the bubble's top-right (D46), sitting above the
+     top border like a folder label — styled like the DONE/RUNNING mode-label
+     (small, letter-spaced, ambient). A --bg pad keeps the border from showing
+     through behind it. Collapses to nothing when empty. */
+  #bubble-project {
+    position: absolute; bottom: 100%; right: 1.5vmin;
+    /* Straddle the top border like a folder tab. The --bg pad masks the border
+       directly beneath the label so it never reads as a strikethrough through
+       the letters. */
+    transform: translateY(50%);
+    padding: 0 1vmin; background: var(--bg);
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 2.6vmin; letter-spacing: 0.2em; color: var(--dim); opacity: 1;
+    white-space: nowrap;
   }
+  #bubble-project:empty { display: none; }
 
   /* D16: the approval card is a full-screen takeover — the deck's only job
      while a prompt blocks a session is to get it answered. */
@@ -323,8 +377,18 @@
   </form>
 
   <section id="deck" class="hidden">
-    <!-- Clawd shows the state: sprite swapped per reducer pose, never text. -->
-    <img id="clawd" alt="">
+    <!-- Clawd and his speech bubble share one row: the bubble sits at the
+         mascot's right, above the clock, as if Clawd is speaking. Visible
+         exactly while the pose is typing; empty in this scaffold slice. The
+         project tag rides the whole bubble lifetime. -->
+    <div id="mascot-row">
+      <!-- Clawd shows the state: sprite swapped per reducer pose, never text. -->
+      <img id="clawd" alt="">
+      <div id="bubble" class="hidden">
+        <span id="bubble-line"></span>
+        <span id="bubble-project"></span>
+      </div>
+    </div>
     <div id="digits">--:--</div>
     <div id="session-line">
       <div id="session-title"></div>
@@ -339,7 +403,6 @@
   <div id="status"></div>
 </main>
 
-<ul id="ticker" class="hidden"></ul>
 <div id="alert-flash"></div>
 <div id="choreo"></div>
 
@@ -369,6 +432,7 @@
   import {
     allowHoldMs,
     ambientShift,
+    bubbleVisible,
     clawdPose,
     clawdSprite,
     completionAlert,
@@ -383,7 +447,6 @@
     initialDeckState,
     initialPrompts,
     initialQuestionDraft,
-    initialTicker,
     fragmentToken,
     handshakeWave,
     localEventTime,
@@ -392,9 +455,9 @@
     reduceDeck,
     reducePrompts,
     reduceQuestionDraft,
-    reduceTicker,
     runningCountBadge,
     STRIPE_WIPE_MS,
+    titleVisible,
   } from '/deck-reducer.js'
 
   const TOKEN_KEY = 'slopdeck_deck_token'
@@ -402,13 +465,14 @@
   const input = document.getElementById('token-input')
   const deck = document.getElementById('deck')
   const main = document.querySelector('main')
+  const title = document.querySelector('h1')
   const digits = document.getElementById('digits')
   const sessionTitle = document.getElementById('session-title')
   const sessionCount = document.getElementById('session-count')
   const firstRunHintEl = document.getElementById('first-run-hint')
   const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
-  const tickerEl = document.getElementById('ticker')
+  const bubble = document.getElementById('bubble')
   const pauseToggle = document.getElementById('pause-toggle')
   const clawd = document.getElementById('clawd')
   const approvalClawd = document.getElementById('approval-clawd')
@@ -430,7 +494,6 @@
   if (localStorage.getItem(SEEN_SESSION_KEY) === 'true') {
     state = { ...state, seenSession: true }
   }
-  let ticker = initialTicker
   let prompts = initialPrompts
   let deckToken = null
   let connected = false
@@ -494,35 +557,21 @@
     // Clawd's pose is the reducer's word too — fed the prompt queue so a
     // waiting card alarms him. Only a changed pose touches src: the render
     // tick must not restart the sprite request twice a second.
-    const sprite = clawdSprite(clawdPose(view, prompts.length > 0, Date.now() < waveUntil))
+    const pose = clawdPose(view, prompts.length > 0, Date.now() < waveUntil)
+    const sprite = clawdSprite(pose)
     if (clawd.getAttribute('src') !== sprite) clawd.setAttribute('src', sprite)
+    // The bubble's lifetime and the title's are the pose's word — the same
+    // single source of truth as the sprite. The bubble speaks exactly while
+    // Clawd types; the title steps aside for it and returns at rest. Empty in
+    // this scaffold slice — content wiring lands in a later slice.
+    bubble.classList.toggle('hidden', !bubbleVisible(pose))
+    title.classList.toggle('hidden', !titleVisible(pose))
+    // The bubble sits in `main`'s flow beside the mascot, so the one burn-in
+    // shift on `main` carries it too — no separate transform to keep in sync.
     const shift = ambientShift(Math.floor(Date.now() / 60_000))
     main.style.transform = `translate(${shift.x}px, ${shift.y}px)`
-    tickerEl.style.transform = `translate(${shift.x}px, ${shift.y}px)`
   }
   setInterval(render, 500)
-
-  // Prepend only rows the DOM hasn't seen so the 150ms slide-in fires exactly
-  // once per action; eviction mirrors the reducer's bounded window.
-  const renderedRowKeys = new Set()
-  function renderTicker() {
-    for (let i = ticker.length - 1; i >= 0; i -= 1) {
-      const row = ticker[i]
-      if (renderedRowKeys.has(row.key)) continue
-      renderedRowKeys.add(row.key)
-      const li = document.createElement('li')
-      li.dataset.key = row.key
-      li.dataset.risk = row.risk
-      // Command text is untrusted input — textContent only, never markup.
-      li.textContent = row.tool === 'Bash' ? '$ ' + row.detail : row.tool + ' ' + row.detail
-      tickerEl.prepend(li)
-    }
-    while (tickerEl.childElementCount > ticker.length) {
-      const oldest = tickerEl.lastElementChild
-      renderedRowKeys.delete(oldest.dataset.key)
-      oldest.remove()
-    }
-  }
 
   // D11: one full-saturation boundary flash + a haptic tap, then stillness.
   // The hidden-deck channel is the gateway's push — nothing to do here.
@@ -558,22 +607,16 @@
     render()
   }
 
-  function onToolEvent(message) {
-    const event = JSON.parse(message.data)
-    ticker = reduceTicker(ticker, { ...event, at: localEventTime(event, Date.now()) })
-    renderTicker()
-  }
-
-  // The install's handshake is an ordinary event: same ticker reducer as tool
-  // rows, and the wave is the reducer's age-gated decision — the page only
-  // remembers the deadline, which the 500ms render tick compares against.
+  // The install's handshake earns Clawd's bounded wave, nothing more. It fires
+  // when no session is running, so the pose-derived bubble has no home for it —
+  // the install ping never masquerades as a running command. The wave is the
+  // reducer's age-gated decision; the page only remembers the deadline, which
+  // the 500ms render tick compares against.
   let waveUntil = 0
   function onHandshakeEvent(message) {
     const event = JSON.parse(message.data)
     const receiptNow = Date.now()
     const rebased = { ...event, at: localEventTime(event, receiptNow) }
-    ticker = reduceTicker(ticker, rebased)
-    renderTicker()
     const until = handshakeWave(rebased, receiptNow)
     if (until !== null) {
       waveUntil = until
@@ -881,7 +924,6 @@
     deckToken = token
     form.classList.add('hidden')
     deck.classList.remove('hidden')
-    tickerEl.classList.remove('hidden')
     status.textContent = 'connecting…'
     render()
 
@@ -905,7 +947,6 @@
           source.close()
           localStorage.removeItem(TOKEN_KEY)
           deck.classList.add('hidden')
-          tickerEl.classList.add('hidden')
           form.classList.remove('hidden')
           status.textContent = 'deck token rejected — paste a current one'
           return
@@ -930,7 +971,9 @@
     }
     source.addEventListener('prompt', onDeckEvent)
     source.addEventListener('stop', onDeckEvent)
-    source.addEventListener('tool', onToolEvent)
+    // `tool` frames still stream from the gateway; the pose-derived bubble does
+    // not consume them yet (this scaffold slice shows no content). The content
+    // reducer that taps this seam lands in a later slice.
     source.addEventListener('handshake', onHandshakeEvent)
     source.addEventListener('permission', onPromptLifecycleEvent)
     source.addEventListener('permission-resolved', onPromptLifecycleEvent)

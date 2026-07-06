@@ -152,7 +152,7 @@ describe('tracer: permission gate', () => {
   })
 })
 
-describe('tracer: activity ticker', () => {
+describe('tracer: tool event stream', () => {
   it('delivers a PostToolUse Bash payload to a connected deck within 1s, correctly highlighted', async () => {
     const controller = new AbortController()
     const streamResponse = await fetch(`${baseUrl}/api/stream?token=${DECK_TOKEN}`, {
