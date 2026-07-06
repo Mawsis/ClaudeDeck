@@ -432,6 +432,7 @@
   import {
     allowHoldMs,
     ambientShift,
+    bubbleLine,
     bubbleVisible,
     clawdPose,
     clawdSprite,
@@ -444,6 +445,7 @@
     firstRunHint,
     formatElapsed,
     formatTimeOfDay,
+    initialBubble,
     initialDeckState,
     initialPrompts,
     initialQuestionDraft,
@@ -452,6 +454,7 @@
     localEventTime,
     pulseColon,
     queueBadge,
+    reduceBubble,
     reduceDeck,
     reducePrompts,
     reduceQuestionDraft,
@@ -473,6 +476,7 @@
   const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
   const bubble = document.getElementById('bubble')
+  const bubbleLineEl = document.getElementById('bubble-line')
   const pauseToggle = document.getElementById('pause-toggle')
   const clawd = document.getElementById('clawd')
   const approvalClawd = document.getElementById('approval-clawd')
@@ -495,6 +499,10 @@
     state = { ...state, seenSession: true }
   }
   let prompts = initialPrompts
+  // The one command Clawd holds in his speech bubble — the latest tool call,
+  // deduped across reconnect replay by (bootId, id). Held until a newer tool
+  // event overwrites it; the pose, not this state, decides when it shows.
+  let bubbleState = initialBubble
   let deckToken = null
   let connected = false
   // Threshold and VAPID key are the gateway's to decide — defaults hold only
@@ -562,10 +570,14 @@
     if (clawd.getAttribute('src') !== sprite) clawd.setAttribute('src', sprite)
     // The bubble's lifetime and the title's are the pose's word — the same
     // single source of truth as the sprite. The bubble speaks exactly while
-    // Clawd types; the title steps aside for it and returns at rest. Empty in
-    // this scaffold slice — content wiring lands in a later slice.
+    // Clawd types; the title steps aside for it and returns at rest. The line
+    // is the latest held command, clamped to one code-point-safe line — the CSS
+    // owns the final visual ellipsis. Assigned via textContent so the untrusted
+    // command is shown literally as text, never parsed as markup.
     bubble.classList.toggle('hidden', !bubbleVisible(pose))
     title.classList.toggle('hidden', !titleVisible(pose))
+    const line = bubbleLine(bubbleState)
+    if (bubbleLineEl.textContent !== line) bubbleLineEl.textContent = line
     // The bubble sits in `main`'s flow beside the mascot, so the one burn-in
     // shift on `main` carries it too — no separate transform to keep in sync.
     const shift = ambientShift(Math.floor(Date.now() / 60_000))
@@ -622,6 +634,15 @@
       waveUntil = until
       render()
     }
+  }
+
+  // A completed tool call fills the bubble with its command. reduceBubble dedups
+  // replayed frames by (bootId, id), so a reconnect that replays the ring buffer
+  // lands on the true latest command without restacking. No `at` rebase needed —
+  // the bubble holds a line, not a clock; it carries no time to keep honest.
+  function onToolEvent(message) {
+    bubbleState = reduceBubble(bubbleState, JSON.parse(message.data))
+    render()
   }
 
   // D5: interception mode flows through the same reducer as everything else —
@@ -971,9 +992,9 @@
     }
     source.addEventListener('prompt', onDeckEvent)
     source.addEventListener('stop', onDeckEvent)
-    // `tool` frames still stream from the gateway; the pose-derived bubble does
-    // not consume them yet (this scaffold slice shows no content). The content
-    // reducer that taps this seam lands in a later slice.
+    // `tool` frames fill the speech bubble with the current command. The pose
+    // still decides whether it shows; this only keeps the held line current.
+    source.addEventListener('tool', onToolEvent)
     source.addEventListener('handshake', onHandshakeEvent)
     source.addEventListener('permission', onPromptLifecycleEvent)
     source.addEventListener('permission-resolved', onPromptLifecycleEvent)

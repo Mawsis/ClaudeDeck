@@ -172,6 +172,43 @@ export function localEventTime(frame, receiptNow) {
     return receiptNow - age;
 }
 /**
+ * @typedef {{ key: string, tool: string, detail: string }} BubbleState the one
+ *   command Clawd is holding in his speech bubble: its dedup key and the raw
+ *   line the gateway already extracted (command head for Bash, cwd-relative
+ *   path for edits).
+ */
+/** @type {BubbleState} An empty bubble — nothing said yet. */
+export const initialBubble = Object.freeze({ key: '', tool: '', detail: '' });
+/**
+ * The speech bubble holds exactly one command: the latest tool call. Unlike the
+ * ticker it replaced, there is no history and no linger timer — the pose is the
+ * only thing that clears the bubble (bubbleVisible), so reduceBubble only ever
+ * swaps in newer content and never resets it. Lifecycle frames (prompt, stop,
+ * mode) leave the held line untouched, which is how the last command stays put
+ * while the session runs.
+ *
+ * @param {BubbleState} bubble
+ * @param {{ type: string, id: number, bootId?: string, tool?: string,
+ *   detail?: string }} event a deck SSE frame — external JSON, so tool fields
+ *   are normalized here rather than trusted.
+ * @returns {BubbleState}
+ */
+export function reduceBubble(bubble, event) {
+    if (event.type !== 'tool')
+        return bubble;
+    // Reconnect replay is at-least-once; the bubble must reflect the true latest
+    // command, not a replayed older one. Keyed by (bootId, id) exactly as the
+    // ticker did: a restarted gateway reuses ids from 1, so those collisions are
+    // new events, not duplicates. Dedup is exact-key only — the latest command is
+    // whichever frame arrives last, which is load-bearing on the gateway
+    // replaying its ring buffer in ascending id order (event-log.ts). An
+    // out-of-order source would let an older frame clobber a newer one.
+    const key = `${event.bootId ?? ''}:${event.id}`;
+    if (key === bubble.key)
+        return bubble;
+    return { key, tool: String(event.tool ?? ''), detail: String(event.detail ?? '') };
+}
+/**
  * @typedef {{ kind: 'permission', promptId: string, sessionId: string, title: string,
  *   tool: string, detail: string, risk: 'high' | 'routine' }} PermissionCard
  * @typedef {{ question: string, header: string, options: readonly string[],
@@ -415,6 +452,48 @@ export function bubbleVisible(pose) {
  */
 export function titleVisible(pose) {
     return !bubbleVisible(pose);
+}
+/**
+ * The bubble is one fixed-height line: the CSS clamps the visible width with a
+ * text-overflow ellipsis, but the data must not ship an unbounded string into
+ * the DOM, and the cut must fall on a code-point boundary — a split surrogate
+ * pair leaves a broken glyph the browser can't repair. Wider than any viewport
+ * shows, so the CSS still owns the visual ellipsis; this only bounds the string.
+ */
+export const BUBBLE_LINE_MAX = 120;
+/**
+ * `slice()` counts UTF-16 units and can cut a surrogate pair in half. Clamp on
+ * code points instead, mirroring the gateway's clampCodePoints: the unit-level
+ * pre-slice keeps Array.from off a pathologically long line, and the +1 spare
+ * unit covers the cap landing inside the last pair.
+ *
+ * @param {string} text
+ * @param {number} max
+ * @returns {string}
+ */
+function clampCodePoints(text, max) {
+    if (text.length <= max)
+        return text;
+    const points = Array.from(text.slice(0, max * 2 + 1));
+    return points.length <= max ? points.join('') : points.slice(0, max).join('');
+}
+/**
+ * The single line the bubble shows for the held command: the raw line the
+ * gateway already extracted (command head for Bash, cwd-relative path for the
+ * edit tools), tightened to the bubble's fixed one-line budget with a trailing
+ * ellipsis. The ellipsis only appears on a real cut — a line that fits is
+ * shown verbatim.
+ *
+ * @param {BubbleState} bubble
+ * @returns {string}
+ */
+export function bubbleLine(bubble) {
+    const detail = bubble.detail;
+    // Count code points, not UTF-16 units, so a line of astral glyphs isn't cut
+    // early — and so the "does it fit" test matches the code-point clamp.
+    if (Array.from(detail).length <= BUBBLE_LINE_MAX)
+        return detail;
+    return `${clampCodePoints(detail, BUBBLE_LINE_MAX)}…`;
 }
 /**
  * @typedef {{ mode: DeckView['mode'], paused: boolean, promptPending: boolean }} DeckSignature

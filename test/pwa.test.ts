@@ -126,6 +126,22 @@ describe('PWA shell', () => {
     expect(html).not.toContain('innerHTML')
   })
 
+  it('fills the bubble from tool frames through reduceBubble, shown as one code-point-safe line', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // A `tool` frame is the bubble's only content source — the reducer dedups
+    // replay by (bootId, id) and holds the latest command.
+    expect(html).toContain("addEventListener('tool'")
+    expect(html).toContain('reduceBubble')
+    // The display line is the reducer's word, clamped and rendered as text.
+    expect(html).toContain('bubbleLine')
+    expect(html).toMatch(/bubbleLineEl\.textContent\s*=/)
+    // The command is untrusted — it is shown, never parsed as markup.
+    expect(html).not.toContain('innerHTML')
+  })
+
   it('hides the SLOPDECK title while the bubble speaks, restoring it at rest', async () => {
     const { app } = buildApp()
 
