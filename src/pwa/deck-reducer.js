@@ -184,48 +184,191 @@ export function localEventTime(frame, receiptNow) {
 }
 
 /**
- * @typedef {{ key: string, tool: string, detail: string, risk: 'highlighted' | 'routine', at: number }} TickerRow
+ * @typedef {'high' | 'highlighted' | 'routine'} BubbleRisk the three ambient
+ *   tiers, mapped 1:1 to the bash-classifier and preserved end-to-end — the
+ *   ticker flattened `high` into `highlighted`; the bubble must not.
+ * @typedef {'empty' | 'verb' | 'command'} BubblePhase which face the bubble
+ *   shows: `empty` before a turn (and after a handshake — nothing to say),
+ *   `verb` between prompt-submit and the turn's first command (the cycling
+ *   thinking verb), `command` once a tool has landed (the held command line).
+ * @typedef {{ phase: BubblePhase, key: string, tool: string, detail: string,
+ *   category: string, risk: BubbleRisk, project: string }} BubbleState what
+ *   Clawd is saying: the phase, the held command's dedup key, the raw line the
+ *   gateway extracted (command head for Bash, cwd-relative path for edits), the
+ *   classifier category driving the label, the risk tier driving the color,
+ *   and the project the bubble belongs to.
  */
 
-/** @type {readonly TickerRow[]} */
-export const initialTicker = Object.freeze([])
-
-// A desk-clock strip shows a handful of rows; 20 covers a taller layout
-// while keeping the always-on DOM small.
-const TICKER_CAPACITY = 20
+/** The tier the bubble falls back to for anything that is not a known tier —
+ * external JSON is never trusted to carry a valid one. */
+const BUBBLE_RISK_TIERS = Object.freeze(['high', 'highlighted', 'routine'])
 
 /**
- * @param {readonly TickerRow[]} ticker newest row first
- * @param {{ type: string, id: number, at: number, bootId?: string, sessionId?: string,
- *   title?: string, tool?: string, detail?: string, risk?: string }} event a deck SSE
- *   frame — external JSON, so tool fields are normalized here rather than trusted.
- * @returns {readonly TickerRow[]}
+ * @param {unknown} risk
+ * @returns {BubbleRisk}
  */
-export function reduceTicker(ticker, event) {
-  if (event.type !== 'tool' && event.type !== 'handshake') return ticker
-  // Reconnect replay is at-least-once; the audit strip must stay exactly-once.
-  // Keyed by (bootId, id): a restarted gateway reuses ids from 1, and those
-  // collisions are new events, not duplicates.
+function normalizeRisk(risk) {
+  return BUBBLE_RISK_TIERS.includes(/** @type {BubbleRisk} */ (risk))
+    ? /** @type {BubbleRisk} */ (risk)
+    : 'routine'
+}
+
+/** @type {BubbleState} An empty bubble — nothing said yet. */
+export const initialBubble = Object.freeze({
+  phase: 'empty',
+  key: '',
+  tool: '',
+  detail: '',
+  category: 'routine',
+  risk: 'routine',
+  project: '',
+})
+
+/**
+ * The bubble runs a three-phase turn machine, all in this one reducer:
+ *
+ * - `prompt` opens the verb window — but only from `empty`, i.e. the turn's
+ *   first prompt. A prompt that arrives while a command is already held is a
+ *   mid-turn continuation (reduceDeck treats it the same), so the truthfully
+ *   running command stays put rather than being papered over with a verb.
+ * - `tool` holds the latest command and ends the verb window. There is no
+ *   history and no linger timer — the pose owns visibility (bubbleVisible);
+ *   this reducer only ever swaps in the true latest command.
+ * - `stop` ends the turn, returning the bubble to `empty` so the *next* prompt
+ *   can reopen the verb window. The pose already hides the bubble on stop, so
+ *   the just-finished command was invisible anyway — this only rearms the verb.
+ * - `handshake`, `mode`, and every other frame leave the bubble untouched: the
+ *   install ping fires with no running session, so it must never masquerade as
+ *   a command or a think.
+ *
+ * @param {BubbleState} bubble
+ * @param {{ type: string, id: number, bootId?: string, tool?: string,
+ *   detail?: string, category?: string, risk?: string, title?: string }} event
+ *   a deck SSE frame — external JSON, so tool fields are normalized here rather
+ *   than trusted.
+ * @returns {BubbleState}
+ */
+export function reduceBubble(bubble, event) {
+  // The turn's first prompt opens the verb window; a mid-turn prompt (bubble
+  // already past empty) is a continuation and leaves the held command alone.
+  if (event.type === 'prompt') {
+    if (bubble.phase !== 'empty') return bubble
+    return { ...initialBubble, phase: 'verb', project: String(event.title ?? '') }
+  }
+  // A stop closes the turn back to empty — nothing to say, and the next
+  // prompt's verb window is armed. Already empty means nothing changed.
+  if (event.type === 'stop') {
+    return bubble.phase === 'empty' ? bubble : initialBubble
+  }
+  if (event.type !== 'tool') return bubble
+  // Reconnect replay is at-least-once; the bubble must reflect the true latest
+  // command, not a replayed older one. Keyed by (bootId, id) exactly as the
+  // ticker did: a restarted gateway reuses ids from 1, so those collisions are
+  // new events, not duplicates. Dedup is exact-key only — the latest command is
+  // whichever frame arrives last, which is load-bearing on the gateway
+  // replaying its ring buffer in ascending id order (event-log.ts). An
+  // out-of-order source would let an older frame clobber a newer one.
   const key = `${event.bootId ?? ''}:${event.id}`
-  if (ticker.some((row) => row.key === key)) return ticker
-  const row =
-    event.type === 'handshake'
-      ? // The install's proof-of-pipeline ping — an ordinary highlighted row,
-        // no dedicated UI state.
-        { key, tool: 'slopdeck', detail: 'install verified', risk: /** @type {const} */ ('highlighted'), at: event.at }
-      : {
-          key,
-          tool: String(event.tool ?? ''),
-          detail: String(event.detail ?? ''),
-          // The strip renders two tiers; `high` (D15's long-hold tier) is above
-          // `highlighted`, so it must never fall through to a dim routine row.
-          risk:
-            event.risk === 'highlighted' || event.risk === 'high'
-              ? /** @type {const} */ ('highlighted')
-              : /** @type {const} */ ('routine'),
-          at: event.at,
-        }
-  return [row, ...ticker].slice(0, TICKER_CAPACITY)
+  if (key === bubble.key) return bubble
+  // All three risk tiers ride onto the bubble intact (unlike the ticker, which
+  // flattened `high` into `highlighted`); the project is the tool frame's
+  // title — the cwd basename the gateway already derived. The first command of
+  // a turn ends the verb window; the phase becomes `command`.
+  return {
+    phase: 'command',
+    key,
+    tool: String(event.tool ?? ''),
+    detail: String(event.detail ?? ''),
+    category: String(event.category ?? 'routine'),
+    risk: normalizeRisk(event.risk),
+    project: String(event.title ?? ''),
+  }
+}
+
+/**
+ * Claude Code's published thinking verbs — the words the CLI's spinner cycles
+ * while Claude reasons before its first tool call. Kept alphabetical (from
+ * `Accomplishing` to `Zesting`) so the range is legible and the bookends are
+ * verifiable; frozen so no caller can reorder it and silently shift the picker.
+ * @type {readonly string[]}
+ */
+export const SPINNER_VERBS = Object.freeze([
+  'Accomplishing', 'Actioning', 'Actualizing', 'Aligning', 'Analyzing',
+  'Architecting', 'Arranging', 'Assembling', 'Baking', 'Bamboozling',
+  'Bippizadooling', 'Booping', 'Bopping', 'Brainstorming', 'Brewing',
+  'Buffering', 'Building', 'Bungeeing', 'Calculating', 'Calibrating',
+  'Cerebrating', 'Channelling', 'Charging', 'Churning', 'Clauding',
+  'Coalescing', 'Cogitating', 'Combobulating', 'Composing', 'Computing',
+  'Concocting', 'Conjuring', 'Considering', 'Constructing', 'Contemplating',
+  'Cooking', 'Crafting', 'Cranking', 'Creating', 'Crunching', 'Deciphering',
+  'Decoding', 'Deliberating', 'Delving', 'Designing', 'Determining',
+  'Devising', 'Digesting', 'Discombobulating', 'Distilling', 'Divining',
+  'Doing', 'Dreaming', 'Effecting', 'Elaborating', 'Elucidating',
+  'Enchanting', 'Engineering', 'Envisioning', 'Establishing', 'Evaluating',
+  'Exploring', 'Fabricating', 'Fashioning', 'Fathoming', 'Fermenting',
+  'Fiddling', 'Figuring', 'Finagling', 'Finessing', 'Flibbertigibbeting',
+  'Flourishing', 'Focusing', 'Forging', 'Formulating', 'Frolicking',
+  'Gathering', 'Generating', 'Germinating', 'Gestating', 'Grokking',
+  'Hatching', 'Herding', 'Honking', 'Hustling', 'Hypothesizing', 'Ideating',
+  'Illuminating', 'Imagining', 'Incubating', 'Inferring', 'Ingesting',
+  'Inspecting', 'Interpreting', 'Inventing', 'Jamming', 'Jiving',
+  'Juggling', 'Kneading', 'Knitting', 'Ludicrousing', 'Machinating',
+  'Manifesting', 'Marinating', 'Massaging', 'Meandering', 'Moseying',
+  'Mulching', 'Mulling', 'Mustering', 'Musing', 'Navigating', 'Noodling',
+  'Optimizing', 'Orchestrating', 'Organizing', 'Percolating', 'Percussing',
+  'Perusing', 'Philosophising', 'Pinging', 'Plotting', 'Pondering',
+  'Pontificating', 'Prancing', 'Preparing', 'Processing', 'Producing',
+  'Puttering', 'Puzzling', 'Quantifying', 'Querying', 'Questing',
+  'Ratiocinating', 'Reasoning', 'Reconciling', 'Reticulating', 'Rooting',
+  'Ruminating', 'Rustling', 'Scaffolding', 'Scheming', 'Schlepping',
+  'Sculpting', 'Shimmying', 'Shucking', 'Simmering', 'Sketching', 'Smooshing',
+  'Sorting', 'Spelunking', 'Spinning', 'Sprinkling', 'Sprouting', 'Squinting',
+  'Stewing', 'Strategizing', 'Structuring', 'Summoning', 'Surveying',
+  'Sussing', 'Synthesizing', 'Tabulating', 'Thinkerating', 'Thinking',
+  'Tinkering', 'Toiling', 'Transfiguring', 'Transmuting', 'Traversing',
+  'Trundling', 'Unfurling', 'Unpacking', 'Unravelling', 'Untangling',
+  'Vibing', 'Visualizing', 'Wandering', 'Weaving', 'Whirring', 'Whisking',
+  'Wibbling', 'Wizarding', 'Working', 'Wrangling', 'Wrestling', 'Yak-shaving',
+  'Zesting',
+])
+
+/**
+ * Pick a thinking verb for a given seed. The seed is the render tick — the
+ * caller injects `Math.floor(Date.now() / VERB_CYCLE_MS)` exactly as the deck
+ * injects `now` into `deckView`, so verb selection stays pure while the ~1.5s
+ * cadence lives entirely in the projection. `Math.abs` keeps a negative or
+ * fractional seed on the list; a non-finite seed falls back to the first verb
+ * rather than reading `undefined` off the array.
+ *
+ * @param {number} seed the render tick — an integer index the caller advances
+ * @returns {string} the verb for this tick
+ */
+export function spinnerVerb(seed) {
+  // The list is a non-empty frozen literal and the index is a modulo of its
+  // length, so the read is always in bounds; the `?? 'Thinking'` coalesce only
+  // satisfies noUncheckedIndexedAccess and doubles as the non-finite fallback.
+  const index = Number.isFinite(seed) ? Math.abs(Math.floor(seed)) % SPINNER_VERBS.length : 0
+  return SPINNER_VERBS[index] ?? 'Thinking'
+}
+
+/** The verb window's cycle time: the CLI's TUI advances its spinner word about
+ * every 1.5s, so the deck matches that cadence. The projection turns the wall
+ * clock into a seed with `Math.floor(now / VERB_CYCLE_MS)` — one integer step
+ * per cycle — and hands it to bubbleVerbLine. */
+export const VERB_CYCLE_MS = 1_500
+
+/**
+ * The line the bubble shows during the verb window: the cycling thinking verb
+ * with a trailing ellipsis, so it reads as a thought in progress (`Pondering…`)
+ * rather than a finished label. The seed is the render tick the projection
+ * injects — the same clock-at-the-boundary discipline as `spinnerVerb` — so the
+ * ~1.5s cadence lives in the caller, and this stays pure and pinnable.
+ *
+ * @param {number} seed the render tick (`Math.floor(now / VERB_CYCLE_MS)`)
+ * @returns {string}
+ */
+export function bubbleVerbLine(seed) {
+  return `${spinnerVerb(seed)}…`
 }
 
 /**
@@ -459,6 +602,119 @@ export function clawdPose(view, promptPending = false, waving = false) {
   if (view.mode === 'running') return 'typing'
   if (view.mode === 'done') return 'waving'
   return 'sleeping'
+}
+
+/**
+ * The speech bubble's lifetime, derived from the mascot's pose — the single
+ * source of truth, not a timer or a Stop event. Clawd speaks exactly while he
+ * types (a session is running); any other pose (waving, sleeping, alarmed,
+ * paused, offline) clears the bubble in the same beat the pose changes.
+ *
+ * @param {ClawdPose} pose
+ * @returns {boolean}
+ */
+export function bubbleVisible(pose) {
+  return pose === 'typing'
+}
+
+/**
+ * The centered SLOPDECK title steps aside while the bubble speaks and returns
+ * when the deck is at rest — the exact inverse of the bubble, so the two can
+ * never both own the top of the deck.
+ *
+ * @param {ClawdPose} pose
+ * @returns {boolean}
+ */
+export function titleVisible(pose) {
+  return !bubbleVisible(pose)
+}
+
+/**
+ * The bubble is one fixed-height line: the CSS clamps the visible width with a
+ * text-overflow ellipsis, but the data must not ship an unbounded string into
+ * the DOM, and the cut must fall on a code-point boundary — a split surrogate
+ * pair leaves a broken glyph the browser can't repair. Wider than any viewport
+ * shows, so the CSS still owns the visual ellipsis; this only bounds the string.
+ */
+export const BUBBLE_LINE_MAX = 120
+
+/**
+ * `slice()` counts UTF-16 units and can cut a surrogate pair in half. Clamp on
+ * code points instead, mirroring the gateway's clampCodePoints: the unit-level
+ * pre-slice keeps Array.from off a pathologically long line, and the +1 spare
+ * unit covers the cap landing inside the last pair.
+ *
+ * @param {string} text
+ * @param {number} max
+ * @returns {string}
+ */
+function clampCodePoints(text, max) {
+  if (text.length <= max) return text
+  const points = Array.from(text.slice(0, max * 2 + 1))
+  return points.length <= max ? points.join('') : points.slice(0, max).join('')
+}
+
+/** The a3-hybrid separator between the scannable category label and the raw
+ * command tail — a middle dot padded so it reads as one line, not a path. */
+const LABEL_SEPARATOR = ' · '
+
+/**
+ * The fixed label copy per classifier category, plus the leading verb to strip
+ * off the tail so it does not echo the label (`git push · origin main`, not
+ * `git push · git push origin main`). Categories carrying `high` risk lead with
+ * a ⚠ so the danger reads even in monochrome. The `strip` regex is anchored at
+ * the tail's start and only fires when the command actually begins with that
+ * verb — a compound command (`cd app && npm install`) keeps its whole tail,
+ * since there is no leading verb to lift. `routine` and `edit` are absent: they
+ * carry no label and fall through to the raw line.
+ */
+const CATEGORY_LABELS = Object.freeze({
+  'git-push': { label: 'git push', strip: /^git\s+push\s+/ },
+  'force-push': { label: '⚠ git push --force', strip: /^git\s+push\s+(?:--force(?:-with-lease)?|-\w*f\b)\s+/ },
+  'package-install': { label: 'installing', strip: /^(?:npm|pnpm|yarn|bun|pip3?|brew|apt|apt-get|gem|cargo|composer)\s+(?:i|install|add|require)\s+/ },
+  migration: { label: '⚠ db migration', strip: null },
+  deploy: { label: '⚠ deploying', strip: null },
+  docker: { label: 'docker', strip: /^docker(?:-compose)?(?:\s+|$)/ },
+  'destructive-delete': { label: '⚠ rm -rf', strip: /^rm\s+(?:-\w*[rfR]\S*|--(?:recursive|force))\s+/ },
+})
+
+/**
+ * Clamp a composed line to the one-line budget with a trailing ellipsis, only
+ * on a real cut — a line that fits is returned verbatim. Code-point counted so
+ * astral glyphs aren't cut early and the fit test matches the clamp.
+ *
+ * @param {string} line
+ * @returns {string}
+ */
+function clampBubbleLine(line) {
+  if (Array.from(line).length <= BUBBLE_LINE_MAX) return line
+  return `${clampCodePoints(line, BUBBLE_LINE_MAX)}…`
+}
+
+/**
+ * The single line the bubble shows for the held command. Three shapes, all
+ * clamped to the bubble's fixed one-line budget with a trailing ellipsis:
+ * - a classified high-impact Bash command becomes `LABEL · tail`, where the
+ *   label is the scannable category and the tail is the raw command with the
+ *   labeled verb lifted off so it doesn't echo (a3 hybrid);
+ * - routine Bash and the edit tools show the raw line the gateway extracted,
+ *   untouched (command head or cwd-relative path).
+ * Truncation lands on the composed label+tail, never the raw command alone, so
+ * the label is never what gets cut.
+ *
+ * @param {BubbleState} bubble
+ * @returns {string}
+ */
+export function bubbleLine(bubble) {
+  const labeled = CATEGORY_LABELS[/** @type {keyof typeof CATEGORY_LABELS} */ (bubble.category)]
+  if (labeled === undefined) return clampBubbleLine(bubble.detail)
+  // Lift the labeled verb off the front only when the command actually starts
+  // with it; a buried match (compound command) keeps its whole tail.
+  const tail = labeled.strip ? bubble.detail.replace(labeled.strip, '') : bubble.detail
+  // A stripped-to-empty tail (a bare `docker`) shows the label alone — never a
+  // dangling `docker · ` separator with nothing after it.
+  const line = tail === '' ? labeled.label : `${labeled.label}${LABEL_SEPARATOR}${tail}`
+  return clampBubbleLine(line)
 }
 
 /**

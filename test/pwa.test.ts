@@ -103,23 +103,71 @@ describe('PWA shell', () => {
     expect(html).toContain('ambientShift')
   })
 
-  it('renders the activity ticker: tool events reduce into a risk-differentiated VT323 strip', async () => {
+  it('scaffolds the speech bubble in the ticker\'s place: a fixed single-line box, visibility derived from the pose', async () => {
     const { app } = buildApp()
 
     const html = await (await app.request('/')).text()
 
-    // Tool events flow through the same pure-reducer path as the clock.
-    expect(html).toContain("addEventListener('tool'")
-    expect(html).toContain('reduceTicker')
-    // D13: ticker lines are VT323, not the display font.
-    expect(html).toContain('VT323')
-    expect(html).toContain('id="ticker"')
-    // Highlighted vs routine rows differ by a data attribute the CSS keys on.
-    expect(html).toContain("data-risk='highlighted'")
-    // Commands are untrusted input — rows must be built with textContent,
-    // never markup interpolation.
-    expect(html).toContain('textContent')
+    // The ticker is gone end-to-end — DOM, CSS, and reducer path. Removing the
+    // fixed bottom strip is what resolves the overflow (#46/#47).
+    expect(html).not.toContain('id="ticker"')
+    expect(html).not.toContain('reduceTicker')
+    expect(html).not.toContain('renderTicker')
+    // The bubble replaces it: an empty box whose lifetime is the mascot's pose,
+    // the single source of truth — not a timer or a Stop event.
+    expect(html).toContain('id="bubble"')
+    expect(html).toContain('bubbleVisible')
+    expect(html).toMatch(/bubbleVisible\(\s*pose\s*\)/)
+    // A project tag rides the bubble even before any content lands.
+    expect(html).toContain('id="bubble-project"')
+    // Fixed-height, single-line: bubble content never reflows the clock stack.
+    expect(html).toMatch(/#bubble\b[\s\S]*?white-space:\s*nowrap/)
+    // Any text that later lands is untrusted input — textContent only.
     expect(html).not.toContain('innerHTML')
+  })
+
+  it('fills the bubble from tool frames through reduceBubble, shown as one code-point-safe line', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // A `tool` frame fills the command line — the reducer dedups replay by
+    // (bootId, id) and holds the latest command.
+    expect(html).toContain("addEventListener('tool'")
+    expect(html).toContain('reduceBubble')
+    // The display line is the reducer's word, clamped and rendered as text.
+    expect(html).toContain('bubbleLine')
+    expect(html).toMatch(/bubbleLineEl\.textContent\s*=/)
+    // The command is untrusted — it is shown, never parsed as markup.
+    expect(html).not.toContain('innerHTML')
+  })
+
+  it('opens the verb window before the first command: a prompt cycles a thinking verb, handed off to the command line', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The same reducer runs the turn machine: prompt/stop frames drive the verb
+    // window, so reduceBubble must be fed from the prompt/stop path, not only
+    // from tool frames.
+    expect(html).toContain('bubbleState = reduceBubble(bubbleState, event)')
+    // The verb line is the reducer's word too, cycled by an injected render tick
+    // at the ~1.5s cadence the caller owns — never Math.random on this side.
+    expect(html).toContain('bubbleVerbLine')
+    expect(html).toMatch(/phase === 'verb'/)
+    expect(html).toMatch(/Math\.floor\(Date\.now\(\) \/ VERB_CYCLE_MS\)/)
+    expect(html).not.toContain('Math.random')
+  })
+
+  it('hides the SLOPDECK title while the bubble speaks, restoring it at rest', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The title's visibility is the reducer's word, the inverse of the bubble —
+    // the two never both own the top of the deck.
+    expect(html).toContain('titleVisible')
+    expect(html).toContain('SLOPDECK')
   })
 
   it('renders ambient honesty: a reducer-derived running count beside the session label, collapsed at zero', async () => {
@@ -478,19 +526,22 @@ describe('PWA shell', () => {
     expect(html).not.toContain('exitFullscreen')
   })
 
-  it('reacts to a handshake as an ordinary event: SSE listener into the shared ticker path, wave decided by the reducer', async () => {
+  it('reacts to a handshake with a bounded wave only — the install ping never masquerades as a running command in the bubble', async () => {
     const { app } = buildApp()
 
     const html = await (await app.request('/')).text()
 
-    // The handshake rides the same listener-and-reducer path as tool rows —
-    // no dedicated UI state anywhere on the page.
+    // The handshake still earns Clawd's bounded wave…
     expect(html).toContain("addEventListener('handshake'")
     // The wave is the reducer's decision (age-gated against replay), held
     // only as a deadline the 500ms render tick compares against.
     expect(html).toContain('handshakeWave')
     expect(html).toContain('waveUntil')
     expect(html).toMatch(/clawdPose\(view,.*waveUntil/)
+    // …but it fires when no session is running, so it has no bubble home: the
+    // bubble is pose-derived and the wave pose is not typing. No ticker path
+    // remains for it to render into.
+    expect(html).not.toContain('reduceTicker')
   })
 
   it('alerts through the shared reducer: in-page flash + vibration, push subscription re-registered on connect', async () => {
