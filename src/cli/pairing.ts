@@ -4,13 +4,32 @@ import type { CliDeps, CliOutcome } from './install.ts'
 /**
  * Phone pairing: a terminal QR encoding `<base>/#deck-token=<deckKey>`. The
  * deck key rides the URL fragment, so it never reaches an HTTP request or a
- * server log; it lives in the config file and leaves only as QR modules — never
- * plaintext on screen or in shell history.
+ * server log. The same URL is also printed as text below the QR so it can be
+ * copied, opened on a second monitor, or typed by hand — which does put the
+ * key in terminal scrollback and any screen-share, so the printed line carries
+ * its own "treat like a password" caveat (PAIRING_URL_CAVEAT).
  */
 
 /** Build the fragment-pairing URL for a base the phone can reach. */
 export function pairingUrl(baseUrl: string, deckKey: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/#deck-token=${encodeURIComponent(deckKey)}`
+}
+
+/** The line printed with the copy-paste URL — the URL embeds the live deck key,
+ * so it is as sensitive as the key itself once it leaves the QR. */
+export const PAIRING_URL_CAVEAT =
+  'or open this link (contains your deck key — treat it like a password):'
+
+/**
+ * Emit the pairing finale to the terminal: the scannable QR, then the same URL
+ * as copy-paste text for a second screen or manual entry. One helper so every
+ * surface (install, qr, rotate) prints pairing identically.
+ */
+export function sayPairing(io: { say: (line: string) => void }, renderQr: (text: string) => string, url: string): void {
+  io.say(renderQr(url))
+  io.say('scan with the phone camera to pair the deck')
+  io.say(PAIRING_URL_CAVEAT)
+  io.say(url)
 }
 
 /**
@@ -47,8 +66,7 @@ export function printPairingQr(deps: CliDeps, config: CliConfig): CliOutcome {
     io.say('could not detect a LAN IP for the local gateway — the phone cannot reach this machine')
     return { ok: false }
   }
-  io.say(renderQr(pairingUrl(base, config.deckKey)))
-  io.say('scan with the phone camera to pair the deck')
+  sayPairing(io, renderQr, pairingUrl(base, config.deckKey))
   return { ok: true }
 }
 

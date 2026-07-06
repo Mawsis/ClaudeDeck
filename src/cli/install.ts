@@ -1,6 +1,6 @@
 import { generateHookSettings } from '../config-generator/generate.ts'
 import type { GatewayClient } from './gateway-client.ts'
-import { pairingUrl, phoneReachableBase } from './pairing.ts'
+import { pairingUrl, phoneReachableBase, sayPairing } from './pairing.ts'
 import {
   addHookSettings,
   removeHookSettings,
@@ -145,8 +145,7 @@ export async function install(
   // The pairing finale: QR for the phone, the honest privacy line, the loud
   // key warning, then a handshake through the real hook-auth path — one moment
   // that proves DNS/LAN, the hook key, gateway, SSE, and deck end to end.
-  io.say(deps.renderQr(pairingUrl(pairingBase, deckKey)))
-  io.say('scan with the phone camera to pair the deck')
+  sayPairing(io, deps.renderQr, pairingUrl(pairingBase, deckKey))
   io.say(PRIVACY_LINE)
   io.say(KEY_WARNING)
 
