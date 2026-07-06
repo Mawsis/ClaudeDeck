@@ -51,18 +51,59 @@ const toolEvent = (id: number, overrides: Record<string, unknown> = {}) => ({
 })
 
 describe('reduceBubble', () => {
-  it('starts empty and fills with the latest tool command', () => {
+  it('starts empty and fills with the latest tool command, carrying its risk tier, category, and project', () => {
     const bubble = reduceBubble(initialBubble, toolEvent(1))
 
-    expect(initialBubble).toEqual({ key: '', tool: '', detail: '' })
-    expect(bubble).toEqual({ key: 'boot-a:1', tool: 'Bash', detail: 'npm install hono' })
+    expect(initialBubble).toEqual({
+      key: '',
+      tool: '',
+      detail: '',
+      category: 'routine',
+      risk: 'routine',
+      project: '',
+    })
+    expect(bubble).toEqual({
+      key: 'boot-a:1',
+      tool: 'Bash',
+      detail: 'npm install hono',
+      category: 'package-install',
+      risk: 'highlighted',
+      project: 'my-app',
+    })
+  })
+
+  it('preserves all three risk tiers end-to-end — high, highlighted, and routine each survive the reducer distinctly', () => {
+    const high = reduceBubble(
+      initialBubble,
+      toolEvent(1, { detail: 'rm -rf build/', category: 'destructive-delete', risk: 'high' }),
+    )
+    const highlighted = reduceBubble(high, toolEvent(2))
+    const routine = reduceBubble(
+      highlighted,
+      toolEvent(3, { detail: 'ls -la', category: 'routine', risk: 'routine' }),
+    )
+
+    expect(high.risk).toBe('high')
+    expect(highlighted.risk).toBe('highlighted')
+    expect(routine.risk).toBe('routine')
+  })
+
+  it('degrades an unknown or missing risk tier to routine — external JSON is never trusted to be a valid tier', () => {
+    const missing = reduceBubble(initialBubble, toolEvent(1, { risk: undefined }))
+    const junk = reduceBubble(initialBubble, toolEvent(2, { risk: 'catastrophic' }))
+
+    expect(missing.risk).toBe('routine')
+    expect(junk.risk).toBe('routine')
   })
 
   it('holds the latest command — a newer tool event overwrites the held line', () => {
     const first = reduceBubble(initialBubble, toolEvent(1))
-    const second = reduceBubble(first, toolEvent(2, { tool: 'Edit', detail: 'src/app.ts' }))
+    const second = reduceBubble(
+      first,
+      toolEvent(2, { tool: 'Edit', detail: 'src/app.ts', category: 'edit', risk: 'routine' }),
+    )
 
-    expect(second).toEqual({ key: 'boot-a:2', tool: 'Edit', detail: 'src/app.ts' })
+    expect(second).toMatchObject({ key: 'boot-a:2', tool: 'Edit', detail: 'src/app.ts' })
   })
 
   it('holds the command across lifecycle frames — only the pose clears the bubble, never a stop', () => {
@@ -83,7 +124,7 @@ describe('reduceBubble', () => {
     const before = reduceBubble(initialBubble, toolEvent(1))
     const after = reduceBubble(before, toolEvent(1, { bootId: 'boot-b', detail: 'ls -la' }))
 
-    expect(after).toEqual({ key: 'boot-b:1', tool: 'Bash', detail: 'ls -la' })
+    expect(after).toMatchObject({ key: 'boot-b:1', tool: 'Bash', detail: 'ls -la' })
   })
 
   it('reflects the true latest command after a reconnect replays the whole buffer in id order', () => {
@@ -100,11 +141,18 @@ describe('reduceBubble', () => {
       bubble = reduceBubble(bubble, toolEvent(id, { detail: `cmd-${id}` }))
     }
 
-    expect(bubble).toEqual({ key: 'boot-a:5', tool: 'Bash', detail: 'cmd-5' })
+    expect(bubble).toMatchObject({ key: 'boot-a:5', tool: 'Bash', detail: 'cmd-5' })
   })
 })
 
-const bubbleOf = (detail: string, tool = 'Bash') => ({ key: 'boot-a:1', tool, detail })
+const bubbleOf = (detail: string, tool = 'Bash', category = 'routine') => ({
+  key: 'boot-a:1',
+  tool,
+  detail,
+  category,
+  risk: 'routine' as const,
+  project: 'my-app',
+})
 
 describe('bubbleLine', () => {
   it('shows a routine Bash command as its raw head, untouched when it fits', () => {
@@ -112,7 +160,56 @@ describe('bubbleLine', () => {
   })
 
   it('shows an edit tool line as the relative path the gateway extracted, untouched when it fits', () => {
-    expect(bubbleLine(bubbleOf('src/gateway/app.ts', 'Edit'))).toBe('src/gateway/app.ts')
+    expect(bubbleLine(bubbleOf('src/gateway/app.ts', 'Edit', 'edit'))).toBe('src/gateway/app.ts')
+  })
+
+  it('prefixes a classified high-impact Bash command with its category label and a middle dot', () => {
+    // a3 hybrid: scannable label, then the real command tail with the labeled
+    // verb stripped so it does not echo — `git push · origin main…`.
+    expect(bubbleLine(bubbleOf('git push origin main', 'Bash', 'git-push'))).toBe(
+      'git push · origin main',
+    )
+  })
+
+  it('labels each classifier category with its fixed copy and strips the leading verb from the tail', () => {
+    const cases: ReadonlyArray<readonly [string, string, string]> = [
+      ['git-push', 'git push origin main --set-upstream', 'git push · origin main --set-upstream'],
+      ['force-push', 'git push --force origin main', '⚠ git push --force · origin main'],
+      ['package-install', 'npm install hono', 'installing · hono'],
+      ['migration', 'prisma migrate deploy', '⚠ db migration · prisma migrate deploy'],
+      ['deploy', 'kubectl apply -f k8s/', '⚠ deploying · kubectl apply -f k8s/'],
+      ['docker', 'docker compose up -d', 'docker · compose up -d'],
+      ['destructive-delete', 'rm -rf build/ dist/', '⚠ rm -rf · build/ dist/'],
+    ]
+    for (const [category, detail, expected] of cases) {
+      expect(bubbleLine(bubbleOf(detail, 'Bash', category)), category).toBe(expected)
+    }
+  })
+
+  it('falls through to the raw head for the routine category and the edit tools — no label, no dot', () => {
+    expect(bubbleLine(bubbleOf('ls -la', 'Bash', 'routine'))).toBe('ls -la')
+    expect(bubbleLine(bubbleOf('src/app.ts', 'Edit', 'edit'))).toBe('src/app.ts')
+  })
+
+  it('shows the label alone when stripping the verb leaves an empty tail — a bare `docker` is not `docker · `', () => {
+    expect(bubbleLine(bubbleOf('docker', 'Bash', 'docker'))).toBe('docker')
+  })
+
+  it('keeps the full command as the tail when the labeled verb is buried in a compound command', () => {
+    // The classifier matches anywhere (`cd app && npm install`), so there is no
+    // leading verb to strip; the whole command is the honest tail.
+    expect(bubbleLine(bubbleOf('cd app && npm install', 'Bash', 'package-install'))).toBe(
+      'installing · cd app && npm install',
+    )
+  })
+
+  it('truncates a classified line on the composed label+tail, not the raw command alone', () => {
+    const detail = `git push origin ${'b'.repeat(BUBBLE_LINE_MAX)}`
+    const line = bubbleLine(bubbleOf(detail, 'Bash', 'git-push'))
+
+    expect(line.startsWith('git push · origin ')).toBe(true)
+    expect(line.endsWith('…')).toBe(true)
+    expect([...line]).toHaveLength(BUBBLE_LINE_MAX + 1)
   })
 
   it('truncates an over-long line with a trailing ellipsis on one line', () => {

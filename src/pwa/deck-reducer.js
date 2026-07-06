@@ -184,14 +184,40 @@ export function localEventTime(frame, receiptNow) {
 }
 
 /**
- * @typedef {{ key: string, tool: string, detail: string }} BubbleState the one
- *   command Clawd is holding in his speech bubble: its dedup key and the raw
- *   line the gateway already extracted (command head for Bash, cwd-relative
- *   path for edits).
+ * @typedef {'high' | 'highlighted' | 'routine'} BubbleRisk the three ambient
+ *   tiers, mapped 1:1 to the bash-classifier and preserved end-to-end — the
+ *   ticker flattened `high` into `highlighted`; the bubble must not.
+ * @typedef {{ key: string, tool: string, detail: string, category: string,
+ *   risk: BubbleRisk, project: string }} BubbleState the one command Clawd is
+ *   holding in his speech bubble: its dedup key, the raw line the gateway
+ *   extracted (command head for Bash, cwd-relative path for edits), the
+ *   classifier category driving the label, the risk tier driving the color,
+ *   and the project the command belongs to.
  */
 
+/** The tier the bubble falls back to for anything that is not a known tier —
+ * external JSON is never trusted to carry a valid one. */
+const BUBBLE_RISK_TIERS = Object.freeze(['high', 'highlighted', 'routine'])
+
+/**
+ * @param {unknown} risk
+ * @returns {BubbleRisk}
+ */
+function normalizeRisk(risk) {
+  return BUBBLE_RISK_TIERS.includes(/** @type {BubbleRisk} */ (risk))
+    ? /** @type {BubbleRisk} */ (risk)
+    : 'routine'
+}
+
 /** @type {BubbleState} An empty bubble — nothing said yet. */
-export const initialBubble = Object.freeze({ key: '', tool: '', detail: '' })
+export const initialBubble = Object.freeze({
+  key: '',
+  tool: '',
+  detail: '',
+  category: 'routine',
+  risk: 'routine',
+  project: '',
+})
 
 /**
  * The speech bubble holds exactly one command: the latest tool call. Unlike the
@@ -203,8 +229,9 @@ export const initialBubble = Object.freeze({ key: '', tool: '', detail: '' })
  *
  * @param {BubbleState} bubble
  * @param {{ type: string, id: number, bootId?: string, tool?: string,
- *   detail?: string }} event a deck SSE frame — external JSON, so tool fields
- *   are normalized here rather than trusted.
+ *   detail?: string, category?: string, risk?: string, title?: string }} event
+ *   a deck SSE frame — external JSON, so tool fields are normalized here rather
+ *   than trusted.
  * @returns {BubbleState}
  */
 export function reduceBubble(bubble, event) {
@@ -218,7 +245,17 @@ export function reduceBubble(bubble, event) {
   // out-of-order source would let an older frame clobber a newer one.
   const key = `${event.bootId ?? ''}:${event.id}`
   if (key === bubble.key) return bubble
-  return { key, tool: String(event.tool ?? ''), detail: String(event.detail ?? '') }
+  // All three risk tiers ride onto the bubble intact (unlike the ticker, which
+  // flattened `high` into `highlighted`); the project is the tool frame's
+  // title — the cwd basename the gateway already derived.
+  return {
+    key,
+    tool: String(event.tool ?? ''),
+    detail: String(event.detail ?? ''),
+    category: String(event.category ?? 'routine'),
+    risk: normalizeRisk(event.risk),
+    project: String(event.title ?? ''),
+  }
 }
 
 /**
@@ -504,22 +541,67 @@ function clampCodePoints(text, max) {
   return points.length <= max ? points.join('') : points.slice(0, max).join('')
 }
 
+/** The a3-hybrid separator between the scannable category label and the raw
+ * command tail — a middle dot padded so it reads as one line, not a path. */
+const LABEL_SEPARATOR = ' · '
+
 /**
- * The single line the bubble shows for the held command: the raw line the
- * gateway already extracted (command head for Bash, cwd-relative path for the
- * edit tools), tightened to the bubble's fixed one-line budget with a trailing
- * ellipsis. The ellipsis only appears on a real cut — a line that fits is
- * shown verbatim.
+ * The fixed label copy per classifier category, plus the leading verb to strip
+ * off the tail so it does not echo the label (`git push · origin main`, not
+ * `git push · git push origin main`). Categories carrying `high` risk lead with
+ * a ⚠ so the danger reads even in monochrome. The `strip` regex is anchored at
+ * the tail's start and only fires when the command actually begins with that
+ * verb — a compound command (`cd app && npm install`) keeps its whole tail,
+ * since there is no leading verb to lift. `routine` and `edit` are absent: they
+ * carry no label and fall through to the raw line.
+ */
+const CATEGORY_LABELS = Object.freeze({
+  'git-push': { label: 'git push', strip: /^git\s+push\s+/ },
+  'force-push': { label: '⚠ git push --force', strip: /^git\s+push\s+(?:--force(?:-with-lease)?|-\w*f\b)\s+/ },
+  'package-install': { label: 'installing', strip: /^(?:npm|pnpm|yarn|bun|pip3?|brew|apt|apt-get|gem|cargo|composer)\s+(?:i|install|add|require)\s+/ },
+  migration: { label: '⚠ db migration', strip: null },
+  deploy: { label: '⚠ deploying', strip: null },
+  docker: { label: 'docker', strip: /^docker(?:-compose)?(?:\s+|$)/ },
+  'destructive-delete': { label: '⚠ rm -rf', strip: /^rm\s+(?:-\w*[rfR]\S*|--(?:recursive|force))\s+/ },
+})
+
+/**
+ * Clamp a composed line to the one-line budget with a trailing ellipsis, only
+ * on a real cut — a line that fits is returned verbatim. Code-point counted so
+ * astral glyphs aren't cut early and the fit test matches the clamp.
+ *
+ * @param {string} line
+ * @returns {string}
+ */
+function clampBubbleLine(line) {
+  if (Array.from(line).length <= BUBBLE_LINE_MAX) return line
+  return `${clampCodePoints(line, BUBBLE_LINE_MAX)}…`
+}
+
+/**
+ * The single line the bubble shows for the held command. Three shapes, all
+ * clamped to the bubble's fixed one-line budget with a trailing ellipsis:
+ * - a classified high-impact Bash command becomes `LABEL · tail`, where the
+ *   label is the scannable category and the tail is the raw command with the
+ *   labeled verb lifted off so it doesn't echo (a3 hybrid);
+ * - routine Bash and the edit tools show the raw line the gateway extracted,
+ *   untouched (command head or cwd-relative path).
+ * Truncation lands on the composed label+tail, never the raw command alone, so
+ * the label is never what gets cut.
  *
  * @param {BubbleState} bubble
  * @returns {string}
  */
 export function bubbleLine(bubble) {
-  const detail = bubble.detail
-  // Count code points, not UTF-16 units, so a line of astral glyphs isn't cut
-  // early — and so the "does it fit" test matches the code-point clamp.
-  if (Array.from(detail).length <= BUBBLE_LINE_MAX) return detail
-  return `${clampCodePoints(detail, BUBBLE_LINE_MAX)}…`
+  const labeled = CATEGORY_LABELS[/** @type {keyof typeof CATEGORY_LABELS} */ (bubble.category)]
+  if (labeled === undefined) return clampBubbleLine(bubble.detail)
+  // Lift the labeled verb off the front only when the command actually starts
+  // with it; a buried match (compound command) keeps its whole tail.
+  const tail = labeled.strip ? bubble.detail.replace(labeled.strip, '') : bubble.detail
+  // A stripped-to-empty tail (a bare `docker`) shows the label alone — never a
+  // dangling `docker · ` separator with nothing after it.
+  const line = tail === '' ? labeled.label : `${labeled.label}${LABEL_SEPARATOR}${tail}`
+  return clampBubbleLine(line)
 }
 
 /**
