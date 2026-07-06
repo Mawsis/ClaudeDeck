@@ -1,5 +1,5 @@
 import { generateHookSettings } from "../config-generator/generate.js";
-import { pairingUrl, phoneReachableBase } from "./pairing.js";
+import { pairingUrl, phoneReachableBase, sayPairing } from "./pairing.js";
 import { addHookSettings, removeHookSettings, removeZshrcBlock, } from "./settings-surgeon.js";
 /** The default hosted gateway — the author's always-on backend. */
 export const HOSTED_GATEWAY_URL = 'https://slopdeck.mawsis.dev';
@@ -60,8 +60,7 @@ export async function install(deps, options) {
     // The pairing finale: QR for the phone, the honest privacy line, the loud
     // key warning, then a handshake through the real hook-auth path — one moment
     // that proves DNS/LAN, the hook key, gateway, SSE, and deck end to end.
-    io.say(deps.renderQr(pairingUrl(pairingBase, deckKey)));
-    io.say('scan with the phone camera to pair the deck');
+    sayPairing(io, deps.renderQr, pairingUrl(pairingBase, deckKey));
     io.say(PRIVACY_LINE);
     io.say(KEY_WARNING);
     const handshake = await client.handshake(hookKey, {

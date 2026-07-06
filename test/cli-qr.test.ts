@@ -17,6 +17,20 @@ describe('slopdeck qr', () => {
     expect(said.join('\n')).toContain('[qr for https://deck.example.com/#deck-token=deck-key-9]')
   })
 
+  it('also prints the pairing URL as copy-paste text, with a treat-like-a-password caveat', async () => {
+    const { deps, said } = harness({
+      files: { [PATHS.configFile]: configFileContent('https://deck.example.com', 'deck-key-9') },
+    })
+
+    await qr(deps)
+
+    const output = said.join('\n')
+    // The same URL the QR encodes, as plain text for a second screen / manual entry.
+    expect(output).toContain('https://deck.example.com/#deck-token=deck-key-9')
+    // It carries the live key, so the printed line must flag it as sensitive.
+    expect(output).toContain('treat it like a password')
+  })
+
   it('percent-encodes the key and tolerates a trailing slash on the configured gateway URL', async () => {
     const { deps, qrRenders } = harness({
       files: { [PATHS.configFile]: configFileContent('https://deck.example.com/', 'a+b/c#d') },
