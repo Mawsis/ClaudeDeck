@@ -25,6 +25,10 @@
        and saturation — a dim warning, not a screaming alert. Full-saturation
        red stays reserved for the done-flash, per the deck's ambient discipline. */
     --accent-brick: #a0432e;
+    /* The edit-verb tier (Edit/MultiEdit/NotebookEdit): an ambient amber tuned
+       to --accent-ambient's luminance — the dim, always-on cousin of the bright
+       --prompt yellow, which stays reserved for the takeover card. */
+    --edit-amber: #9a7b1f;
     --offline: #707070;
     /* D14: yellow = prompt pending. The takeover is the one surface allowed
        to sit bright — it exists to be answered, not to be ambient. */
@@ -279,6 +283,22 @@
      override, all ambient/desaturated so nothing burns the OLED. */
   #bubble[data-risk='high'] #bubble-line { color: var(--accent-brick); }
   #bubble[data-risk='highlighted'] #bubble-line { color: var(--accent-ambient); }
+  /* The colored verb prefix for the file-edit tools (D46 follow-up): a short
+     `write`/`edit` word that carries the color while the path stays neutral —
+     the action is known and redundant, so the color does the reading. Natural
+     width (never shrinks); the line beside it takes the rest and truncates.
+     Collapses to nothing when empty (Bash and routine carry no verb), so the
+     gap only exists when there is a verb. Colored off data-verb, mirroring
+     data-risk; ambient hues, none full-saturation. */
+  #bubble-verb {
+    flex: 0 0 auto; align-self: center;
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 4vmin; line-height: 1.4;
+    margin-right: 2vmin;
+  }
+  #bubble-verb:empty { display: none; }
+  #bubble[data-verb='write'] #bubble-verb { color: var(--accent-brick); }
+  #bubble[data-verb='edit'] #bubble-verb { color: var(--edit-amber); }
   /* The project tag is pinned to the bubble's top-right (D46), sitting above the
      top border like a folder label — styled like the DONE/RUNNING mode-label
      (small, letter-spaced, ambient). A --bg pad keeps the border from showing
@@ -400,6 +420,7 @@
       <!-- Clawd shows the state: sprite swapped per reducer pose, never text. -->
       <img id="clawd" alt="">
       <div id="bubble" class="hidden">
+        <span id="bubble-verb"></span>
         <span id="bubble-line"></span>
         <span id="bubble-project"></span>
       </div>
@@ -448,6 +469,7 @@
     allowHoldMs,
     ambientShift,
     bubbleLine,
+    bubbleVerb,
     bubbleVerbLine,
     bubbleVisible,
     clawdPose,
@@ -493,6 +515,7 @@
   const modeLabel = document.getElementById('mode-label')
   const status = document.getElementById('status')
   const bubble = document.getElementById('bubble')
+  const bubbleVerbEl = document.getElementById('bubble-verb')
   const bubbleLineEl = document.getElementById('bubble-line')
   const bubbleProjectEl = document.getElementById('bubble-project')
   const pauseToggle = document.getElementById('pause-toggle')
@@ -604,6 +627,14 @@
         ? bubbleVerbLine(Math.floor(Date.now() / VERB_CYCLE_MS))
         : bubbleLine(bubbleState)
     if (bubbleLineEl.textContent !== line) bubbleLineEl.textContent = line
+    // The file-edit tools get a short colored verb prefix (`write`/`edit`); Bash
+    // and the verb window carry none, so the span empties and collapses. Set via
+    // textContent + data-verb (CSS colors it), never markup.
+    const verb = bubbleState.phase === 'command' ? bubbleVerb(bubbleState) : null
+    const verbLabel = verb === null ? '' : verb.label
+    if (bubbleVerbEl.textContent !== verbLabel) bubbleVerbEl.textContent = verbLabel
+    const verbTier = verb === null ? '' : verb.tier
+    if (bubble.dataset.verb !== verbTier) bubble.dataset.verb = verbTier
     // The risk tier drives the line's ambient color through CSS off data-risk —
     // all three tiers preserved, none flattened. The project tag rides the whole
     // bubble lifetime (it collapses to nothing when empty via :empty). Both set

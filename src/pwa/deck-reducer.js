@@ -679,6 +679,36 @@ const CATEGORY_LABELS = Object.freeze({
 })
 
 /**
+ * The file-edit tools carry a known, redundant verb — the path already says the
+ * rest — so the verb renders as a short colored prefix, split by intent: a write
+ * (creating/overwriting a whole file) reads `write`, an in-place change reads
+ * `edit`. Bash is absent: it carries the classifier label system instead, so it
+ * shows no verb. The value is the `data-verb` color tier (`write` red, `edit`
+ * yellow), driven off CSS the same way `data-risk` colors the line.
+ */
+const EDIT_TOOL_VERBS = Object.freeze({
+  Write: { label: 'write', tier: 'write' },
+  Edit: { label: 'edit', tier: 'edit' },
+  MultiEdit: { label: 'edit', tier: 'edit' },
+  NotebookEdit: { label: 'edit', tier: 'edit' },
+})
+
+/**
+ * The colored verb prefix for the held command, or null when there is none (Bash
+ * and any unmapped tool). Rendered in its own span so the verb carries the color
+ * and the path stays neutral — kept separate from bubbleLine so each is set via
+ * textContent and an untrusted detail never becomes markup.
+ *
+ * @param {BubbleState} bubble
+ * @returns {{ label: string, tier: string } | null}
+ */
+export function bubbleVerb(bubble) {
+  if (bubble.phase !== 'command') return null
+  const verb = EDIT_TOOL_VERBS[/** @type {keyof typeof EDIT_TOOL_VERBS} */ (bubble.tool)]
+  return verb === undefined ? null : { label: verb.label, tier: verb.tier }
+}
+
+/**
  * Clamp a composed line to the one-line budget with a trailing ellipsis, only
  * on a real cut — a line that fits is returned verbatim. Code-point counted so
  * astral glyphs aren't cut early and the fit test matches the clamp.

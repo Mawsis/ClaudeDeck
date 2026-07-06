@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BUBBLE_LINE_MAX,
   bubbleLine,
+  bubbleVerb,
   bubbleVerbLine,
   bubbleVisible,
   initialBubble,
@@ -248,6 +249,38 @@ describe('bubbleLine', () => {
     }
     // Belt and braces: no unpaired surrogate anywhere in the string.
     expect(/[\uD800-\uDFFF]/.test(line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ''))).toBe(false)
+  })
+})
+
+describe('bubbleVerb', () => {
+  it('gives Write the red write-tier verb — a whole-file write reads `write`', () => {
+    expect(bubbleVerb(bubbleOf('src/pwa/index.html', 'Write', 'edit'))).toEqual({
+      label: 'write',
+      tier: 'write',
+    })
+  })
+
+  it('gives the in-place edit tools the amber edit-tier verb', () => {
+    for (const tool of ['Edit', 'MultiEdit', 'NotebookEdit']) {
+      expect(bubbleVerb(bubbleOf('src/app.ts', tool, 'edit')), tool).toEqual({
+        label: 'edit',
+        tier: 'edit',
+      })
+    }
+  })
+
+  it('gives Bash no verb — Bash carries the classifier label system, not a verb prefix', () => {
+    expect(bubbleVerb(bubbleOf('npm install hono', 'Bash', 'package-install'))).toBeNull()
+    expect(bubbleVerb(bubbleOf('ls -la', 'Bash', 'routine'))).toBeNull()
+  })
+
+  it('gives an unmapped tool no verb rather than inventing one', () => {
+    expect(bubbleVerb(bubbleOf('whatever', 'SomeFutureTool', 'routine'))).toBeNull()
+  })
+
+  it('gives no verb outside the command phase — the thinking verb window carries none', () => {
+    expect(bubbleVerb({ ...initialBubble, phase: 'verb' })).toBeNull()
+    expect(bubbleVerb(initialBubble)).toBeNull()
   })
 })
 
