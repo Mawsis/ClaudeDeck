@@ -14,8 +14,10 @@ export function loadServiceWorkerJs() {
 }
 // The swappable brand directory (issue: rebrand = asset swap, not a refactor).
 // Loaded as an explicit whitelist at startup: the route serves map hits only,
-// so a request path can never reach the filesystem.
-const BRAND_ASSETS = [
+// so a request path can never reach the filesystem. Exported so the build's
+// pwa-copy step (and its test) can prove every declared sprite ships to
+// dist/pwa/ — the list is the single source of truth for what boots (#51).
+export const BRAND_ASSETS = [
     'icon.svg',
     'clawd-sleeping.svg',
     'clawd-typing.svg',

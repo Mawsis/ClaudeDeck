@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slopdeck</title>
+<!-- Brand assets live in /brand — a rebrand swaps that directory's files. -->
+<link rel="icon" type="image/svg+xml" href="/brand/icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0c0c;
+    --accent: #FF6B00;
+    --done: #4ade80;
+    --dim: #9a9a9a;
+    /* Ambient palette: ~35–45% luminance, desaturated — nothing burns the
+       OLED statically; full saturation is reserved for transition moments. */
+    --idle-digits: #6f6f6f;
+    --accent-ambient: #a05a22;
+    --done-ambient: #47795a;
+    /* The bubble's `high`-risk tier (rm -rf, force-push, migration, deploy): an
+       ambient brick-red tuned to sit alongside --accent-ambient in luminance
+       and saturation — a dim warning, not a screaming alert. Full-saturation
+       red stays reserved for the done-flash, per the deck's ambient discipline. */
+    --accent-brick: #a0432e;
+    --offline: #707070;
+    /* D14: yellow = prompt pending. The takeover is the one surface allowed
+       to sit bright — it exists to be answered, not to be ambient. */
+    --prompt: #facc15;
+    /* D14: purple = paused (passthrough). Rendered dim like the other ambient
+       accents — an always-on state must never sit at full saturation. */
+    --paused: #a855f7;
+    --paused-ambient: #6b4a86;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--dim);
+    font-family: 'Press Start 2P', ui-monospace, Menlo, monospace;
+    min-height: 100vh; min-height: 100dvh;
+    display: flex; align-items: center; justify-content: center;
+  }
+  main {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4vmin; padding: 4vmin; width: 100%;
+  }
+  h1 { color: var(--accent); font-size: 2.5vmin; letter-spacing: 0.4em; opacity: 0.35; }
+
+  /* The layout drifts a few px each minute (JS sets the offset) — ease over. */
+  main { transition: transform 1.2s ease; }
+
+  /* Desk clock: digits own the landscape width; portrait just shrinks them. */
+  #digits {
+    font-size: 16vw; line-height: 1; white-space: nowrap;
+    color: var(--idle-digits);
+  }
+  @media (orientation: portrait) {
+    #digits { font-size: 15vw; }
+  }
+  body[data-mode='running'] #digits { color: var(--accent-ambient); }
+  body[data-mode='done'] #digits {
+    color: var(--done-ambient);
+    animation: done-flash 600ms ease-out;
+  }
+  /* The only full-saturation moment: the instant a session finishes. */
+  @keyframes done-flash {
+    0% { color: var(--done); text-shadow: 0 0 3vmin rgba(74, 222, 128, 0.55); }
+    100% { color: var(--done-ambient); text-shadow: none; }
+  }
+
+  /* Disconnected is unmistakable: gray accent + scanline static, no clock. */
+  body[data-mode='offline'] #digits,
+  body[data-mode='offline'] #mode-label { color: var(--offline); }
+  #deck::after {
+    content: ''; position: fixed; inset: 0; pointer-events: none; opacity: 0;
+    background: repeating-linear-gradient(
+      0deg, rgba(255, 255, 255, 0.09) 0 2px, transparent 2px 5px
+    );
+  }
+  body[data-mode='offline'] #deck::after {
+    opacity: 1;
+    animation: static-drift 0.9s steps(3) infinite;
+  }
+  @keyframes static-drift {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(5px); }
+  }
+
+  #session-line { display: flex; align-items: baseline; justify-content: center; gap: 1.5vmin; }
+  #session-title {
+    font-size: 3.5vmin; color: #fff; opacity: 0.45;
+    max-width: 80vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Ambient honesty: how many sessions run behind the shown one — dim, and
+     collapsed to nothing at zero so a quiet deck carries no ghost chrome. */
+  #session-count {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; color: var(--dim); opacity: 0.55;
+  }
+  #session-count:empty { display: none; }
+  /* One-time first-run hint: visible only while no session event has ever
+     reached the log — proof the pipeline still awaits its first real event. */
+  #first-run-hint {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 2.6vmin; color: var(--dim); opacity: 0.5;
+  }
+  #mode-label { font-size: 2.5vmin; letter-spacing: 0.4em; }
+  body[data-mode='running'] #mode-label { color: var(--accent-ambient); }
+  body[data-mode='done'] #mode-label { color: var(--done-ambient); }
+
+  /* D5/D14: paused overlays the purple accent onto whatever session is active,
+     readable from peripheral vision. Offline is excluded — a down stream owns
+     the gray-static accent outright, and its rules follow to win regardless. */
+  body[data-paused='true']:not([data-mode='offline']) #digits,
+  body[data-paused='true']:not([data-mode='offline']) #mode-label {
+    color: var(--paused-ambient);
+  }
+  /* The toggle lights purple while paused so the control itself reports state.
+     Ambient chrome: bordered outline, not a saturated fill — it sits on the
+     always-on deck between rare taps. */
+  #pause-toggle {
+    background: var(--bg); color: var(--dim); border: 2px solid var(--dim);
+    font-size: 1.8vmin; letter-spacing: 0.3em; padding: 1.2vmin 3vmin;
+    opacity: 0.55; cursor: pointer;
+  }
+  body[data-paused='true'] #pause-toggle {
+    color: var(--paused); border-color: var(--paused); opacity: 0.9;
+  }
+  body[data-mode='offline'] #pause-toggle { color: var(--offline); border-color: var(--offline); }
+
+  #status { position: fixed; bottom: 2vmin; font-size: 2vmin; opacity: 0.6; }
+
+  /* Clawd acts out the deck state (sprite chosen by the reducer's pose).
+     Pixel art stays chunky at any size; ambient-dim like everything else. */
+  #clawd {
+    width: 14vmin; height: 14vmin;
+    image-rendering: pixelated;
+    opacity: 0.85;
+  }
+  /* D17: the typing loop is the only continuous animation, and only while
+     running. steps() keeps the bob pixel-true — no sub-pixel smearing. */
+  body[data-mode='running'] #clawd { animation: clawd-bob 1.1s steps(2, end) infinite; }
+  @keyframes clawd-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(0.6vmin); }
+  }
+  /* D17: idle is near-still — Clawd blinks once every ~30s, a two-frame
+     opacity dip, and holds still the rest of the cycle. */
+  body[data-mode='idle'] #clawd { animation: clawd-blink 30s steps(1, end) infinite; }
+  @keyframes clawd-blink {
+    0%, 98.9% { opacity: 0.85; }
+    99% { opacity: 0.35; }
+    99.5%, 100% { opacity: 0.85; }
+  }
+  /* Paused and offline out-rank running's accent — they must stop its motion
+     too, or a paused (or disconnected) running session would keep bobbing. */
+  body[data-paused='true'] #clawd { animation: none; }
+  body[data-mode='offline'] #clawd { animation: none; }
+  /* The takeover card borrows the same mascot at header scale. */
+  #approval-clawd { width: 8vmin; height: 8vmin; image-rendering: pixelated; }
+
+  /* D11 + D17: the in-page done alert — one full-saturation green boundary
+     flash, then back to stillness. Fires only for threshold-crossing turns. */
+  #alert-flash { position: fixed; inset: 0; pointer-events: none; opacity: 0; }
+  #alert-flash.firing { animation: boundary-flash 900ms ease-out; }
+  @keyframes boundary-flash {
+    0% {
+      opacity: 1;
+      box-shadow: inset 0 0 0 6px var(--done), inset 0 0 14vmin rgba(74, 222, 128, 0.5);
+    }
+    100% {
+      opacity: 0;
+      box-shadow: inset 0 0 0 6px var(--done), inset 0 0 14vmin rgba(74, 222, 128, 0);
+    }
+  }
+
+  /* D17: the transition overlay. One element carries both choreographies —
+     which one fires is deckTransition's call; JS sets the durations from the
+     shared budget constants (--wipe-ms / --crt-ms). The overlay is additive
+     on top of an already-repainted state, so legibility is never delayed. */
+  #choreo { position: fixed; inset: 0; pointer-events: none; z-index: 20; opacity: 0; }
+  /* The everyday stripe-wipe: one accent band sweeps down in chunky steps. */
+  #choreo.wipe {
+    background: linear-gradient(
+      180deg, transparent 0 40%, var(--accent) 40% 60%, transparent 60% 100%
+    );
+    background-size: 100% 24vmin;
+    background-repeat: no-repeat;
+    animation: stripe-wipe var(--wipe-ms, 400ms) steps(10, end);
+  }
+  @keyframes stripe-wipe {
+    0% { opacity: 0.5; background-position-y: -24vmin; }
+    100% { opacity: 0.5; background-position-y: 100vh; }
+  }
+  /* The full CRT ceremony — prompt arrival only: the D12 four-color stripe
+     stack rolls through, then the screen settles. */
+  #choreo.crt {
+    background: repeating-linear-gradient(
+      180deg,
+      #FF6B00 0 3vmin, #4ade80 3vmin 6vmin, #3b82f6 6vmin 9vmin, #a855f7 9vmin 12vmin,
+      transparent 12vmin 24vmin
+    );
+    animation: crt-choreo var(--crt-ms, 560ms) steps(14, end);
+  }
+  @keyframes crt-choreo {
+    0% { opacity: 0.85; background-position-y: -24vmin; }
+    60% { opacity: 0.85; }
+    100% { opacity: 0; background-position-y: 100vh; }
+  }
+
+  /* D7/D16: Clawd's speech bubble — a fixed-height single-line box beside the
+     mascot, above the clock, as if Clawd is speaking. It replaces the old
+     bottom ticker strip (removed, along with the overflow it caused). This
+     slice scaffolds the box and wires its visibility; content lands later.
+
+     The mascot and bubble share one horizontal row so the bubble literally
+     sits at Clawd's right and drifts with him under the burn-in shift — no
+     fixed positioning to desync from the mascot. The row is a fixed height
+     (the mascot's), and the bubble is a single line, so bubble content never
+     reflows the clock stack below. Empty in this slice; hidden entirely unless
+     the pose is typing (`.hidden` toggled by the render tick), so a resting
+     deck carries no ghost chrome. */
+  /* The row spans the clock's width so the bubble's right edge lines up with the
+     digits' right edge, and its height is exactly the mascot's — so the bubble
+     top sits at the mascot's crown and its bottom at the mascot's foot, never
+     dropping into the clock below. The bubble flexes to fill whatever the mascot
+     leaves, reading as a big panel Clawd is speaking. margin-bottom opens a gap
+     to the digits so nothing overlaps. */
+  #mascot-row {
+    display: flex; align-items: stretch; gap: 4.5vmin;
+    width: 78vw; max-width: 144vmin; height: 14vmin; margin-bottom: 3vmin;
+  }
+  #bubble {
+    position: relative; /* anchors the tail and the top-right project tag */
+    flex: 1; box-sizing: border-box;
+    display: flex; align-items: center;
+    padding: 0 3vmin;
+    border: 2px solid var(--dim); border-radius: 0;
+    background: var(--bg);
+  }
+  /* The speech-bubble tail: a pixel-art notch on the bubble's left edge pointing
+     at Clawd's mouth — this is what says "the mascot is speaking," not just a
+     box. Two stacked triangles keep the hard 2px border continuous: the outer
+     one is border-colored, the inner one (offset by the border width) punches
+     the --bg fill back out, leaving a bordered arrow. */
+  #bubble::before, #bubble::after {
+    content: ''; position: absolute; right: 100%; top: 50%;
+    width: 0; height: 0; border-style: solid;
+  }
+  #bubble::before {
+    /* outer triangle = the border edge of the tail */
+    margin-top: -1.7vmin;
+    border-width: 1.7vmin 1.9vmin 1.7vmin 0;
+    border-color: transparent var(--dim) transparent transparent;
+  }
+  #bubble::after {
+    /* inner triangle = the --bg fill, pulled 2px inside the outer edge */
+    margin-top: -1.4vmin;
+    border-width: 1.4vmin 1.6vmin 1.4vmin 0;
+    border-color: transparent var(--bg) transparent transparent;
+  }
+  /* Single line, fixed height: the content clamps with an ellipsis rather than
+     wrapping or growing the box. VT323 (D13) — a display line, not a payload. */
+  #bubble-line {
+    flex: 1;
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 4vmin; line-height: 1.4; color: var(--dim); opacity: 0.9;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-height: 1.4em;
+  }
+  /* The three risk tiers, mapped 1:1 to the bash-classifier and driven off
+     data-risk on the bubble (mirroring the deck's data-mode pattern). All three
+     stay distinct — the ticker collapsed `high` into `highlighted`; the bubble
+     must not. `routine` keeps the base --dim above; only the two impact tiers
+     override, all ambient/desaturated so nothing burns the OLED. */
+  #bubble[data-risk='high'] #bubble-line { color: var(--accent-brick); }
+  #bubble[data-risk='highlighted'] #bubble-line { color: var(--accent-ambient); }
+  /* The project tag is pinned to the bubble's top-right (D46), sitting above the
+     top border like a folder label — styled like the DONE/RUNNING mode-label
+     (small, letter-spaced, ambient). A --bg pad keeps the border from showing
+     through behind it. Collapses to nothing when empty. */
+  #bubble-project {
+    position: absolute; bottom: 100%; right: 1.5vmin;
+    /* Straddle the top border like a folder tab. The --bg pad masks the border
+       directly beneath the label so it never reads as a strikethrough through
+       the letters. */
+    transform: translateY(50%);
+    padding: 0 1vmin; background: var(--bg);
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 2.6vmin; letter-spacing: 0.2em; color: var(--dim); opacity: 1;
+    white-space: nowrap;
+  }
+  #bubble-project:empty { display: none; }
+
+  /* D16: the approval card is a full-screen takeover — the deck's only job
+     while a prompt blocks a session is to get it answered. */
+  #approval {
+    position: fixed; inset: 0; z-index: 10;
+    background: var(--bg);
+    display: flex; flex-direction: column; gap: 3vmin;
+    padding: 4vmin; border: 4px solid var(--prompt);
+  }
+  #approval-header { display: flex; justify-content: space-between; align-items: baseline; }
+  #approval-tool {
+    color: var(--prompt); font-size: 3.5vmin; letter-spacing: 0.2em;
+  }
+  /* Queue-depth badge: how many prompts wait behind this card. An empty
+     badge (drained queue) collapses to nothing — no ghost chrome. */
+  #queue-badge {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; color: var(--bg); background: var(--prompt);
+    padding: 0 1vmin;
+  }
+  #queue-badge:empty { display: none; }
+  #approval-session {
+    font-family: 'VT323', ui-monospace, Menlo, monospace;
+    font-size: 3vmin; color: var(--dim);
+  }
+  /* D13: the payload — where misreading has consequences — renders in a
+     crisp real monospace, never the display fonts. */
+  #approval-payload {
+    font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+    /* Legible at a docked arm's length: clamp keeps it from getting tiny on a
+       narrow phone (vmin tracks the short side) or oversized on a tablet, while
+       still scaling with the viewport. Overflows scroll — the takeover is
+       fixed-size, so bigger text never disturbs the ticker grid behind it. */
+    font-size: clamp(1.05rem, 3.2vmin, 1.6rem); line-height: 1.5; color: #fff;
+    flex: 1; overflow-y: auto; margin: 0;
+    white-space: pre-wrap; word-break: break-all;
+    border: 2px solid var(--dim); padding: 2vmin;
+  }
+  /* Question cards: choices stack full-width — each is a single tap, big
+     enough for a docked-arm's-length finger. Ask-in-terminal stays the dim
+     escape hatch, visually apart from the choices. */
+  #question-options { display: flex; flex-direction: column; gap: 2vmin; }
+  #question-options button {
+    /* Choice labels are the primary read on a question card — size them up to
+       match the payload, clamped so a long option wraps rather than shrinks. */
+    font-size: clamp(1rem, 3vmin, 1.5rem); line-height: 1.3;
+    padding: 2.5vmin 1.5vmin;
+    background: var(--bg); color: var(--prompt); border-color: var(--prompt);
+  }
+  /* A toggled-on multiSelect choice reads as filled — the finger sees the set. */
+  #question-options button.selected { background: var(--prompt); color: var(--bg); }
+  #question-options #question-confirm { color: var(--done); border-color: var(--done); }
+  #question-options #question-confirm:disabled { color: var(--dim); border-color: var(--dim); opacity: 0.5; }
+  #question-options #question-ask { color: var(--dim); border-color: var(--dim); }
+  /* D16: side-by-side actions. D15: Deny and Ask are single taps; Allow only
+     fires after a completed hold, so accidental contact with a desk-exposed
+     screen can only produce safe outcomes. */
+  #approval-actions { display: flex; gap: 2vmin; }
+  #approval-actions button { flex: 1; font-size: clamp(0.95rem, 2.8vmin, 1.4rem); padding: 2.5vmin 1vmin; }
+  #approve-allow {
+    background: var(--bg); color: var(--prompt); border-color: var(--prompt);
+    display: flex; flex-direction: column; align-items: stretch; gap: 1.5vmin;
+    /* The button is a gesture surface: no scroll capture, no long-press
+       text selection — the pointer belongs to the charge. */
+    touch-action: none; -webkit-user-select: none; user-select: none;
+  }
+  #allow-track { display: block; border: 2px solid var(--prompt); padding: 2px; height: 2.4vmin; }
+  #allow-fill { display: block; height: 100%; width: 0; background: var(--prompt); }
+  /* The pixel-art charge: steps() fills the bar in chunky segments over the
+     risk-scaled hold; dropping the class snaps it back empty instantly. */
+  #approve-allow.charging #allow-fill {
+    width: 100%;
+    transition: width var(--hold-ms, 500ms) steps(12, end);
+  }
+  #approve-deny, #approve-ask {
+    background: var(--bg); color: var(--dim); border-color: var(--dim);
+  }
+
+  form { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+  input, button {
+    background: var(--bg); color: #fff; border: 2px solid var(--accent);
+    border-radius: 0; padding: 0.8rem; font: inherit; font-size: 0.75rem;
+  }
+  button { background: var(--accent); color: var(--bg); cursor: pointer; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body data-mode="idle">
+<main>
+  <h1>SLOPDECK</h1>
+
+  <form id="token-form" class="hidden">
+    <input id="token-input" type="password" placeholder="paste deck token" autocomplete="off" required>
+    <button type="submit">CONNECT</button>
+  </form>
+
+  <section id="deck" class="hidden">
+    <!-- Clawd and his speech bubble share one row: the bubble sits at the
+         mascot's right, above the clock, as if Clawd is speaking. Visible
+         exactly while the pose is typing; empty in this scaffold slice. The
+         project tag rides the whole bubble lifetime. -->
+    <div id="mascot-row">
+      <!-- Clawd shows the state: sprite swapped per reducer pose, never text. -->
+      <img id="clawd" alt="">
+      <div id="bubble" class="hidden">
+        <span id="bubble-line"></span>
+        <span id="bubble-project"></span>
+      </div>
+    </div>
+    <div id="digits">--:--</div>
+    <div id="session-line">
+      <div id="session-title"></div>
+      <span id="session-count"></span>
+    </div>
+    <div id="mode-label">IDLE</div>
+    <div id="first-run-hint" class="hidden">waiting for first session — run claude in any project</div>
+    <!-- D5: one-tap Pause flips the gateway to passthrough. No arming ritual. -->
+    <button id="pause-toggle" type="button">PAUSE</button>
+  </section>
+
+  <div id="status"></div>
+</main>
+
+<div id="alert-flash"></div>
+<div id="choreo"></div>
+
+<section id="approval" class="hidden">
+  <div id="approval-header">
+    <img id="approval-clawd" alt="">
+    <div id="approval-tool"></div>
+    <div id="queue-badge"></div>
+  </div>
+  <div id="approval-session"></div>
+  <pre id="approval-payload"></pre>
+  <!-- Question cards (D3's flagged AskUserQuestion hack): one button per
+       choice replaces the Allow/Deny rail — answering is a single tap
+       because nothing destructive rides on it. -->
+  <div id="question-options" class="hidden"></div>
+  <div id="approval-actions">
+    <button id="approve-deny" type="button">DENY</button>
+    <button id="approve-ask" type="button">ASK IN TERMINAL</button>
+    <button id="approve-allow" type="button">
+      <span>HOLD TO ALLOW</span>
+      <span id="allow-track"><span id="allow-fill"></span></span>
+    </button>
+  </div>
+</section>
+
+<script type="module">
+  import {
+    allowHoldMs,
+    ambientShift,
+    bubbleLine,
+    bubbleVerbLine,
+    bubbleVisible,
+    clawdPose,
+    clawdSprite,
+    completionAlert,
+    CRT_CHOREO_MS,
+    deckSignature,
+    deckTransition,
+    deckView,
+    draftAnswers,
+    firstRunHint,
+    formatElapsed,
+    formatTimeOfDay,
+    initialBubble,
+    initialDeckState,
+    initialPrompts,
+    initialQuestionDraft,
+    fragmentToken,
+    handshakeWave,
+    localEventTime,
+    pulseColon,
+    queueBadge,
+    reduceBubble,
+    reduceDeck,
+    reducePrompts,
+    reduceQuestionDraft,
+    runningCountBadge,
+    STRIPE_WIPE_MS,
+    titleVisible,
+    VERB_CYCLE_MS,
+  } from '/deck-reducer.js'
+
+  const TOKEN_KEY = 'slopdeck_deck_token'
+  const form = document.getElementById('token-form')
+  const input = document.getElementById('token-input')
+  const deck = document.getElementById('deck')
+  const main = document.querySelector('main')
+  const title = document.querySelector('h1')
+  const digits = document.getElementById('digits')
+  const sessionTitle = document.getElementById('session-title')
+  const sessionCount = document.getElementById('session-count')
+  const firstRunHintEl = document.getElementById('first-run-hint')
+  const modeLabel = document.getElementById('mode-label')
+  const status = document.getElementById('status')
+  const bubble = document.getElementById('bubble')
+  const bubbleLineEl = document.getElementById('bubble-line')
+  const bubbleProjectEl = document.getElementById('bubble-project')
+  const pauseToggle = document.getElementById('pause-toggle')
+  const clawd = document.getElementById('clawd')
+  const approvalClawd = document.getElementById('approval-clawd')
+
+  const alertFlash = document.getElementById('alert-flash')
+  const approval = document.getElementById('approval')
+  const approvalTool = document.getElementById('approval-tool')
+  const approvalSession = document.getElementById('approval-session')
+  const approvalPayload = document.getElementById('approval-payload')
+  const questionOptions = document.getElementById('question-options')
+  const approvalActions = document.getElementById('approval-actions')
+  const queueBadgeEl = document.getElementById('queue-badge')
+
+  let state = initialDeckState
+  // "Never again" must outlive reloads, replay, and even an emptied gateway
+  // log — the one-way latch is seeded from storage and written back the
+  // moment the first session event lands.
+  const SEEN_SESSION_KEY = 'slopdeck_seen_session'
+  if (localStorage.getItem(SEEN_SESSION_KEY) === 'true') {
+    state = { ...state, seenSession: true }
+  }
+  let prompts = initialPrompts
+  // The one command Clawd holds in his speech bubble — the latest tool call,
+  // deduped across reconnect replay by (bootId, id). Held until a newer tool
+  // event overwrites it; the pose, not this state, decides when it shows.
+  let bubbleState = initialBubble
+  let deckToken = null
+  let connected = false
+  // Threshold and VAPID key are the gateway's to decide — defaults hold only
+  // until the first /api/deck-config fetch succeeds.
+  let deckConfig = { alertThresholdMs: undefined, vapidPublicKey: null }
+
+  // D17: the transition overlay. Which choreography (if any) a repaint earns
+  // is deckTransition's call, judged on before/after state signatures — the
+  // CRT ceremony can only ever fire on prompt arrival, from any code path.
+  const choreo = document.getElementById('choreo')
+  choreo.style.setProperty('--wipe-ms', STRIPE_WIPE_MS + 'ms')
+  choreo.style.setProperty('--crt-ms', CRT_CHOREO_MS + 'ms')
+  let lastSignature = deckSignature(deckView(state, Date.now(), { connected }), false)
+  let choreoTimer = null
+  function choreograph(view) {
+    const signature = deckSignature(view, prompts.length > 0)
+    const transition = deckTransition(lastSignature, signature)
+    lastSignature = signature
+    if (transition === null) return
+    // Restart cleanly even mid-animation: drop, reflow, re-class.
+    clearTimeout(choreoTimer)
+    choreo.className = ''
+    void choreo.offsetWidth
+    choreo.className = transition
+    choreoTimer = setTimeout(() => {
+      choreo.className = ''
+    }, transition === 'crt' ? CRT_CHOREO_MS : STRIPE_WIPE_MS)
+  }
+
+  // Dumb projection: every visible pixel derives from deckView — no timing
+  // or session logic lives on this side of the reducer.
+  function render() {
+    const view = deckView(state, Date.now(), { connected })
+    choreograph(view)
+    document.body.dataset.mode = view.mode
+    // D5/D14: the paused flag drives the purple accent through CSS; the control
+    // itself reports the inverse action. Both derive from the reducer view —
+    // nothing about pause is toggled imperatively on the DOM.
+    document.body.dataset.paused = view.paused ? 'true' : 'false'
+    pauseToggle.textContent = view.paused ? 'RESUME' : 'PAUSE'
+    // The running count is the reducer's word; a down stream blanks it — a
+    // stale count is the same lie as a stale clock.
+    sessionCount.textContent = view.mode === 'offline' ? '' : runningCountBadge(state)
+    // The hint is ambient guidance, not news — it too yields to offline.
+    firstRunHintEl.classList.toggle('hidden', view.mode === 'offline' || !firstRunHint(state))
+    if (view.mode === 'offline') {
+      digits.textContent = '--:--'
+      sessionTitle.textContent = ''
+      modeLabel.textContent = 'OFFLINE'
+    } else if (view.mode === 'idle') {
+      // D17: the idle clock's only life is the 1Hz colon pulse.
+      digits.textContent = pulseColon(formatTimeOfDay(new Date()), Date.now())
+      sessionTitle.textContent = ''
+      modeLabel.textContent = 'IDLE'
+    } else {
+      digits.textContent = view.elapsedMs === null ? '--:--' : formatElapsed(view.elapsedMs)
+      sessionTitle.textContent = view.title
+      modeLabel.textContent = view.mode === 'running' ? 'RUNNING' : '■ DONE'
+    }
+    // Clawd's pose is the reducer's word too — fed the prompt queue so a
+    // waiting card alarms him. Only a changed pose touches src: the render
+    // tick must not restart the sprite request twice a second.
+    const pose = clawdPose(view, prompts.length > 0, Date.now() < waveUntil)
+    const sprite = clawdSprite(pose)
+    if (clawd.getAttribute('src') !== sprite) clawd.setAttribute('src', sprite)
+    // The bubble's lifetime and the title's are the pose's word — the same
+    // single source of truth as the sprite. The bubble speaks exactly while
+    // Clawd types; the title steps aside for it and returns at rest. The line
+    // is the latest held command, clamped to one code-point-safe line — the CSS
+    // owns the final visual ellipsis. Assigned via textContent so the untrusted
+    // command is shown literally as text, never parsed as markup.
+    bubble.classList.toggle('hidden', !bubbleVisible(pose))
+    title.classList.toggle('hidden', !titleVisible(pose))
+    // Before the turn's first command the bubble cycles a thinking verb; once a
+    // command lands it shows the command line. The ~1.5s cadence is injected
+    // here as the render tick — one integer step per VERB_CYCLE_MS — so the verb
+    // advances on its own between the 500ms repaints while the reducer stays
+    // pure. Verb color rides the routine tier (set below via data-risk).
+    const line =
+      bubbleState.phase === 'verb'
+        ? bubbleVerbLine(Math.floor(Date.now() / VERB_CYCLE_MS))
+        : bubbleLine(bubbleState)
+    if (bubbleLineEl.textContent !== line) bubbleLineEl.textContent = line
+    // The risk tier drives the line's ambient color through CSS off data-risk —
+    // all three tiers preserved, none flattened. The project tag rides the whole
+    // bubble lifetime (it collapses to nothing when empty via :empty). Both set
+    // via textContent/dataset so an untrusted project name is never markup.
+    if (bubble.dataset.risk !== bubbleState.risk) bubble.dataset.risk = bubbleState.risk
+    if (bubbleProjectEl.textContent !== bubbleState.project) {
+      bubbleProjectEl.textContent = bubbleState.project
+    }
+    // The bubble sits in `main`'s flow beside the mascot, so the one burn-in
+    // shift on `main` carries it too — no separate transform to keep in sync.
+    const shift = ambientShift(Math.floor(Date.now() / 60_000))
+    main.style.transform = `translate(${shift.x}px, ${shift.y}px)`
+  }
+  setInterval(render, 500)
+
+  // D11: one full-saturation boundary flash + a haptic tap, then stillness.
+  // The hidden-deck channel is the gateway's push — nothing to do here.
+  function fireDoneAlert() {
+    alertFlash.classList.remove('firing')
+    void alertFlash.offsetWidth // restart the animation for back-to-back alerts
+    alertFlash.classList.add('firing')
+    if ('vibrate' in navigator) navigator.vibrate([120, 60, 120])
+  }
+
+  function onDeckEvent(message) {
+    const event = JSON.parse(message.data)
+    const receiptNow = Date.now()
+    const deckEvent = {
+      type: event.type,
+      sessionId: event.sessionId,
+      title: event.title,
+      // Rebased by server-side age: replayed events stay truthful, and the
+      // live tick never mixes the server's clock with this device's.
+      at: localEventTime(event, receiptNow),
+    }
+    // The reducer decides the alert — against the state before the event,
+    // fed this page's real visibility. receiptNow lets it tell live news
+    // from ring-buffer replay: a reloaded deck absorbs history silently.
+    const alert = completionAlert(state, deckEvent, {
+      thresholdMs: deckConfig.alertThresholdMs,
+      visible: document.visibilityState === 'visible',
+      now: receiptNow,
+    })
+    state = reduceDeck(state, deckEvent)
+    // The same prompt/stop frame drives the bubble's turn machine: a prompt
+    // opens the verb window (the pre-first-command think), a stop closes the
+    // turn so the next prompt can reopen it. Fed the raw event — the phase
+    // machine reads its type and title, not the rebased clock. Tool frames flow
+    // through onToolEvent instead, so this only ever sees prompt/stop here.
+    bubbleState = reduceBubble(bubbleState, event)
+    if (state.seenSession) localStorage.setItem(SEEN_SESSION_KEY, 'true')
+    if (alert !== null && alert.channel === 'in-page') fireDoneAlert()
+    render()
+  }
+
+  // The install's handshake earns Clawd's bounded wave, nothing more. It fires
+  // when no session is running, so the pose-derived bubble has no home for it —
+  // the install ping never masquerades as a running command. The wave is the
+  // reducer's age-gated decision; the page only remembers the deadline, which
+  // the 500ms render tick compares against.
+  let waveUntil = 0
+  function onHandshakeEvent(message) {
+    const event = JSON.parse(message.data)
+    const receiptNow = Date.now()
+    const rebased = { ...event, at: localEventTime(event, receiptNow) }
+    const until = handshakeWave(rebased, receiptNow)
+    if (until !== null) {
+      waveUntil = until
+      render()
+    }
+  }
+
+  // A completed tool call fills the bubble with its command. reduceBubble dedups
+  // replayed frames by (bootId, id), so a reconnect that replays the ring buffer
+  // lands on the true latest command without restacking. No `at` rebase needed —
+  // the bubble holds a line, not a clock; it carries no time to keep honest.
+  function onToolEvent(message) {
+    bubbleState = reduceBubble(bubbleState, JSON.parse(message.data))
+    render()
+  }
+
+  // D5: interception mode flows through the same reducer as everything else —
+  // a mode frame carries only { paused }, so it overlays the accent without
+  // touching the session clock. Replayed on reconnect, so a blip stays truthful.
+  function onModeEvent(message) {
+    const event = JSON.parse(message.data)
+    state = reduceDeck(state, { type: 'mode', paused: event.paused })
+    render()
+  }
+
+  // The tap is fire-and-forget: the gateway answers with a mode event that the
+  // SSE stream echoes back, and that — not this POST — repaints the deck. One
+  // request in flight at a time so a double tap can't cancel its own flip.
+  let toggling = false
+  async function togglePause() {
+    if (deckToken === null || toggling) return
+    toggling = true
+    try {
+      await fetch('/api/pause', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + deckToken, 'Content-Type': 'application/json' },
+        body: '{}',
+      })
+    } catch {
+      // Gateway unreachable — the stream is already projecting OFFLINE; the
+      // mode is unchanged and the next tap retries.
+    }
+    toggling = false
+  }
+  pauseToggle.addEventListener('click', togglePause)
+
+  // The approval takeover (D16): render the oldest pending prompt — FIFO, so
+  // the terminal that's been blocked longest gets answered first. A prompt
+  // rendered from reconnect replay is still genuinely open (settled ones
+  // arrive paired with their permission-resolved event), so the buzz is
+  // honest news either way.
+  let shownPromptId = null
+  // The per-card answering draft (which question we're on, what's selected,
+  // committed answers so far). Reset whenever the top card changes — a
+  // half-answered multi-question call must not bleed into the next card.
+  let questionDraft = initialQuestionDraft
+  // The takeover exists to be answered — its Clawd is always the alarmed one.
+  approvalClawd.setAttribute('src', clawdSprite('alarmed'))
+  function renderApproval() {
+    const current = prompts[0]
+    if (current === undefined) {
+      approval.classList.add('hidden')
+      shownPromptId = null
+      cancelAllowHold()
+      return
+    }
+    // Card changed: reset the draft BEFORE rendering so options reflect the
+    // new card's first question, not the previous card's leftover step.
+    const cardChanged = current.promptId !== shownPromptId
+    if (cardChanged) questionDraft = initialQuestionDraft
+    approval.classList.remove('hidden')
+    const isQuestion = current.kind === 'question'
+    approvalTool.textContent = isQuestion ? '? QUESTION' : '▲ ' + current.tool
+    // The session label tells two prompts from one project apart; the badge
+    // says how many more wait behind this card (empty once the queue drains).
+    approvalSession.textContent =
+      current.title + (current.sessionId ? ' · ' + current.sessionId.slice(0, 8) : '')
+    queueBadgeEl.textContent = queueBadge(prompts)
+    approvalActions.classList.toggle('hidden', isQuestion)
+    questionOptions.classList.toggle('hidden', !isQuestion)
+    if (isQuestion) {
+      renderQuestionStep(current)
+    } else {
+      // Command text is untrusted input — textContent only, never markup.
+      approvalPayload.textContent = current.detail
+    }
+    if (cardChanged) {
+      shownPromptId = current.promptId
+      // A hold begun on the previous card must not keep charging over this
+      // one — the finger is now resting on a different question.
+      cancelAllowHold()
+      // D11: prompt arrival always alerts — this is the in-page channel; the
+      // service worker covers the backgrounded one.
+      if ('vibrate' in navigator) navigator.vibrate([200, 80, 200])
+    }
+  }
+
+  function onPromptLifecycleEvent(message) {
+    prompts = reducePrompts(prompts, JSON.parse(message.data))
+    renderApproval()
+    // The prompt queue is part of the state signature — render now so the
+    // CRT choreography (and Clawd's alarm) fire with the card, not on the
+    // next half-second tick.
+    render()
+  }
+
+  // One resolution in flight at a time: a double tap must not answer the
+  // next card in the queue with the previous card's intent.
+  let resolving = false
+  async function resolveCurrentPrompt(action) {
+    const current = prompts[0]
+    if (current === undefined || resolving) return
+    resolving = true
+    try {
+      await fetch('/api/prompts/' + encodeURIComponent(current.promptId) + '/resolution', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + deckToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+    } catch {
+      // Network hiccup: leave the card up — the gateway's permission-resolved
+      // event (or the 540s fallback) is the truth about whether it settled.
+      resolving = false
+      return
+    }
+    resolving = false
+    // Drop the card locally on any completed round trip: 200 settled it here,
+    // 404 means it settled elsewhere — either way it is no longer pending.
+    prompts = reducePrompts(prompts, { type: 'permission-resolved', promptId: current.promptId })
+    renderApproval()
+  }
+
+  // Render the question the draft is currently on: its text and its options.
+  // A single AskUserQuestion call may hold several questions — we step through
+  // them one at a time (the gateway answers the whole set at once), so the
+  // card shows questions[step], not a flat field.
+  function renderQuestionStep(card) {
+    const questions = Array.isArray(card.questions) ? card.questions : []
+    const spec = questions[questionDraft.step]
+    if (spec === undefined) {
+      // Every question answered — the POST is in flight; hold the last frame.
+      approvalPayload.textContent = ''
+      questionOptions.replaceChildren()
+      return
+    }
+    // Untrusted input — textContent only, never markup. Prefix multi-question
+    // calls with a step counter so the answerer knows more remain.
+    const progress = questions.length > 1 ? '(' + (questionDraft.step + 1) + '/' + questions.length + ') ' : ''
+    const label = spec.header ? spec.header + ' — ' + spec.question : spec.question
+    approvalPayload.textContent = progress + label
+    const options = Array.isArray(spec.options) ? spec.options : []
+    const buttons = options.map((choice) => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = choice
+      // On a multiSelect step, a tap toggles and stays; the picked ones read
+      // as pressed so the finger knows the set so far.
+      if (spec.multiSelect && questionDraft.selected.includes(choice)) {
+        button.setAttribute('aria-pressed', 'true')
+        button.classList.add('selected')
+      }
+      button.addEventListener('click', () => advanceDraft(card, { type: 'tap', choice }))
+      return button
+    })
+    // multiSelect needs an explicit commit — a set of one tap is not the
+    // answer; CONFIRM advances the step (disabled while nothing is chosen).
+    if (spec.multiSelect) {
+      const confirm = document.createElement('button')
+      confirm.type = 'button'
+      confirm.id = 'question-confirm'
+      confirm.textContent = 'CONFIRM' + (questionDraft.selected.length ? ' (' + questionDraft.selected.length + ')' : '')
+      confirm.disabled = questionDraft.selected.length === 0
+      confirm.addEventListener('click', () => advanceDraft(card, { type: 'confirm' }))
+      buttons.push(confirm)
+    }
+    const ask = document.createElement('button')
+    ask.type = 'button'
+    ask.id = 'question-ask'
+    ask.textContent = 'ASK IN TERMINAL'
+    ask.addEventListener('click', () => answerCurrentQuestion({ ask: true }))
+    buttons.push(ask)
+    questionOptions.replaceChildren(...buttons)
+  }
+
+  // A tap or confirm feeds the draft reducer. When every question has an
+  // answer the complete set posts at once; until then we re-render the next
+  // step. multiSelect toggles re-render in place (still same step).
+  function advanceDraft(card, action) {
+    if (resolving) return
+    const questions = Array.isArray(card.questions) ? card.questions : []
+    questionDraft = reduceQuestionDraft(questions, questionDraft, action)
+    const complete = draftAnswers(questions, questionDraft)
+    if (complete !== null) {
+      answerCurrentQuestion({ answers: complete })
+      return
+    }
+    renderApproval()
+  }
+
+  // Post the assembled answer set (or the ask-in-terminal escape hatch) to the
+  // held question. Shares the single-resolution-in-flight guard — a double tap
+  // must not answer the next card with this card's intent.
+  async function answerCurrentQuestion(body) {
+    const current = prompts[0]
+    if (current === undefined || current.kind !== 'question' || resolving) return
+    resolving = true
+    try {
+      await fetch('/api/questions/' + encodeURIComponent(current.promptId) + '/answer', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + deckToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    } catch {
+      // Network hiccup: leave the card up — the gateway's question-resolved
+      // event (or the 540s fallback) is the truth about whether it settled.
+      resolving = false
+      return
+    }
+    resolving = false
+    // Drop the card locally on any completed round trip: 200 settled it here,
+    // 404 means it settled elsewhere — either way it is no longer pending.
+    prompts = reducePrompts(prompts, { type: 'question-resolved', promptId: current.promptId })
+    renderApproval()
+  }
+
+  // D15: Allow is hold-to-fill — pointerdown starts the risk-scaled charge
+  // and only the completed hold sends the decision; a tap or brush charges
+  // for an instant and does nothing.
+  const allowButton = document.getElementById('approve-allow')
+  let allowHoldTimer = null
+  let allowHoldPointerId = null
+  function cancelAllowHold() {
+    if (allowHoldTimer === null) return
+    clearTimeout(allowHoldTimer)
+    allowHoldTimer = null
+    allowHoldPointerId = null
+    allowButton.classList.remove('charging')
+  }
+  allowButton.addEventListener('pointerdown', (pointer) => {
+    const current = prompts[0]
+    if (current === undefined || resolving || allowHoldTimer !== null) return
+    pointer.preventDefault()
+    // Touch pointers get implicit capture, which would keep the charge alive
+    // after the finger slides off the button — release it so pointerleave
+    // cancels the hold the same way it does for a mouse.
+    if (allowButton.hasPointerCapture?.(pointer.pointerId)) {
+      allowButton.releasePointerCapture(pointer.pointerId)
+    }
+    const holdMs = allowHoldMs(current.risk)
+    allowButton.style.setProperty('--hold-ms', holdMs + 'ms')
+    allowButton.classList.add('charging')
+    allowHoldPointerId = pointer.pointerId
+    allowHoldTimer = setTimeout(() => {
+      cancelAllowHold()
+      // The card may have settled elsewhere mid-hold; a completed hold must
+      // never answer a card it wasn't started on.
+      if (prompts[0]?.promptId === current.promptId) resolveCurrentPrompt('allow')
+    }, holdMs)
+  })
+  // Releasing early, sliding off, or losing the pointer resets the bar —
+  // but only the finger that started the charge may interrupt it: a stray
+  // second touch canceling a deliberate hold would be its own accident.
+  for (const interruption of ['pointerup', 'pointercancel', 'pointerleave']) {
+    allowButton.addEventListener(interruption, (pointer) => {
+      if (pointer.pointerId === allowHoldPointerId) cancelAllowHold()
+    })
+  }
+  // A long press must charge the bar, not summon a context menu.
+  allowButton.addEventListener('contextmenu', (menu) => menu.preventDefault())
+
+  document.getElementById('approve-deny').addEventListener('click', () => resolveCurrentPrompt('deny'))
+  document.getElementById('approve-ask').addEventListener('click', () => resolveCurrentPrompt('ask'))
+
+  function vapidKeyBytes(base64url) {
+    const padded = base64url + '='.repeat((4 - (base64url.length % 4)) % 4)
+    const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'))
+    return Uint8Array.from(raw, (char) => char.charCodeAt(0))
+  }
+
+  // Subscriptions live in gateway memory, so every (re)connect re-fetches the
+  // config and re-registers. Any failure leaves in-page alerts intact.
+  async function registerPush(token) {
+    try {
+      const response = await fetch('/api/deck-config', {
+        headers: { Authorization: 'Bearer ' + token },
+      })
+      if (response.ok) {
+        deckConfig = await response.json()
+        // A hard reload starts from initialDeckState (unpaused) with no SSE
+        // replay; deck-config is where it learns it's already paused. A live
+        // mode event that raced ahead of this fetch just re-sets the same bit.
+        state = reduceDeck(state, { type: 'mode', paused: deckConfig.paused === true })
+        render()
+      }
+      if (!deckConfig.vapidPublicKey) return
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+      const registration = await navigator.serviceWorker.register('/sw.js', { type: 'module' })
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKeyBytes(deckConfig.vapidPublicKey),
+      })
+      await fetch('/api/push/subscriptions', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify(subscription),
+      })
+    } catch {
+      // Notification permission denied, or push unsupported — the deck still
+      // flashes while visible; only the locked-screen channel is lost.
+    }
+  }
+
+  function connect(token) {
+    deckToken = token
+    form.classList.add('hidden')
+    deck.classList.remove('hidden')
+    status.textContent = 'connecting…'
+    render()
+
+    // EventSource reconnects on its own and resends Last-Event-ID — the
+    // gateway replays whatever the deck missed while the stream was down.
+    const source = new EventSource('/api/stream?token=' + encodeURIComponent(token))
+
+    // EventSource hides HTTP status, so a rejected token and a dead gateway
+    // both land in onerror — but only one of them can ever recover. Probe an
+    // authenticated endpoint: a definitive 401/403 means retrying is a lie,
+    // so the saved token is cleared and the paste form comes back.
+    let probing = false
+    async function dropRejectedToken() {
+      if (probing) return
+      probing = true
+      try {
+        const response = await fetch('/api/deck-config', {
+          headers: { Authorization: 'Bearer ' + token },
+        })
+        if (response.status === 401 || response.status === 403) {
+          source.close()
+          localStorage.removeItem(TOKEN_KEY)
+          deck.classList.add('hidden')
+          form.classList.remove('hidden')
+          status.textContent = 'deck token rejected — paste a current one'
+          return
+        }
+      } catch {
+        // Gateway unreachable — the stream's own retry loop is the truth.
+      }
+      probing = false
+    }
+
+    source.onopen = () => {
+      connected = true
+      status.textContent = 'connected'
+      render()
+      registerPush(token)
+    }
+    source.onerror = () => {
+      connected = false
+      status.textContent = 'disconnected — retrying'
+      render()
+      dropRejectedToken()
+    }
+    source.addEventListener('prompt', onDeckEvent)
+    source.addEventListener('stop', onDeckEvent)
+    // `tool` frames fill the speech bubble with the current command. The pose
+    // still decides whether it shows; this only keeps the held line current.
+    source.addEventListener('tool', onToolEvent)
+    source.addEventListener('handshake', onHandshakeEvent)
+    source.addEventListener('permission', onPromptLifecycleEvent)
+    source.addEventListener('permission-resolved', onPromptLifecycleEvent)
+    source.addEventListener('question', onPromptLifecycleEvent)
+    source.addEventListener('question-resolved', onPromptLifecycleEvent)
+    source.addEventListener('mode', onModeEvent)
+  }
+
+  // The OS releases the wake lock whenever the page hides; re-acquire on
+  // every return to the foreground so the docked screen stays alive.
+  async function holdWakeLock() {
+    if (!('wakeLock' in navigator)) return
+    try {
+      await navigator.wakeLock.request('screen')
+    } catch {
+      // Denied (e.g. low battery) — the deck still works, the screen may sleep.
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') holdWakeLock()
+  })
+  holdWakeLock()
+
+  // Dock mode: one tap on the idle clock goes fullscreen and locks landscape.
+  // Orientation lock is only permitted while fullscreen, so both ride the same
+  // gesture. Exit is the system back gesture — no custom exit UI.
+  digits.addEventListener('click', async () => {
+    if (document.body.dataset.mode !== 'idle') return
+    try {
+      await document.documentElement.requestFullscreen()
+      await screen.orientation.lock('landscape')
+    } catch {
+      // Either API missing or denied — the deck keeps working un-docked.
+    }
+  })
+
+  form.addEventListener('submit', (submitEvent) => {
+    submitEvent.preventDefault()
+    const token = input.value.trim()
+    if (token === '') return
+    localStorage.setItem(TOKEN_KEY, token)
+    connect(token)
+  })
+
+  // Phone pairing via URL fragment: a #deck-token= fragment is taken exactly
+  // as if it had been pasted into the form — same storage slot, same connect
+  // path, same rejection recovery. Fragments never travel in HTTP requests,
+  // so the token cannot reach server or proxy logs; replaceState scrubs it
+  // from the address bar and the history entry before the deck renders.
+  const fromFragment = fragmentToken(location.hash)
+  if (fromFragment !== null) {
+    history.replaceState(null, '', location.pathname + location.search)
+    localStorage.setItem(TOKEN_KEY, fromFragment)
+    connect(fromFragment)
+  } else {
+    const saved = localStorage.getItem(TOKEN_KEY)
+    if (saved) {
+      connect(saved)
+    } else {
+      form.classList.remove('hidden')
+    }
+  }
+</script>
+</body>
+</html>
