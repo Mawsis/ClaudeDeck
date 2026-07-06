@@ -1,9 +1,28 @@
 {
   "name": "slopdeck",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Ambient phone-as-deck companion + remote permission control for Claude Code",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "cli",
+    "permissions",
+    "hooks",
+    "deck",
+    "pwa",
+    "notifications"
+  ],
+  "homepage": "https://github.com/Mawsis/ClaudeDeck#readme",
+  "bugs": {
+    "url": "https://github.com/Mawsis/ClaudeDeck/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mawsis/ClaudeDeck.git"
+  },
+  "license": "MIT",
+  "author": "Mawsis",
   "bin": {
     "slopdeck": "./bin/slopdeck.js"
   },
@@ -13,8 +32,8 @@
   "files": [
     "bin",
     "dist",
-    "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "dev": "node --watch --experimental-strip-types src/gateway/index.ts",
