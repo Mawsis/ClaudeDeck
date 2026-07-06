@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   BUBBLE_LINE_MAX,
   bubbleLine,
+  bubbleVerbLine,
   bubbleVisible,
   initialBubble,
   reduceBubble,
+  SPINNER_VERBS,
+  spinnerVerb,
   titleVisible,
 } from '../src/pwa/deck-reducer.js'
 
@@ -55,6 +58,7 @@ describe('reduceBubble', () => {
     const bubble = reduceBubble(initialBubble, toolEvent(1))
 
     expect(initialBubble).toEqual({
+      phase: 'empty',
       key: '',
       tool: '',
       detail: '',
@@ -63,6 +67,7 @@ describe('reduceBubble', () => {
       project: '',
     })
     expect(bubble).toEqual({
+      phase: 'command',
       key: 'boot-a:1',
       tool: 'Bash',
       detail: 'npm install hono',
@@ -106,11 +111,13 @@ describe('reduceBubble', () => {
     expect(second).toMatchObject({ key: 'boot-a:2', tool: 'Edit', detail: 'src/app.ts' })
   })
 
-  it('holds the command across lifecycle frames — only the pose clears the bubble, never a stop', () => {
+  it('holds the command across mid-turn frames — a continuation prompt, mode, and handshake never disturb the held line', () => {
     const held = reduceBubble(initialBubble, toolEvent(1))
 
-    for (const type of ['prompt', 'stop', 'mode', 'handshake']) {
-      expect(reduceBubble(held, { type, id: 2, bootId: 'boot-a' }), type).toBe(held)
+    // A prompt arriving after a command is a mid-turn continuation; mode and
+    // handshake carry no command — none of them replaces the running command.
+    for (const type of ['prompt', 'mode', 'handshake']) {
+      expect(reduceBubble(held, { type, id: 2, bootId: 'boot-a', title: 'other' }), type).toBe(held)
     }
   })
 
@@ -146,6 +153,7 @@ describe('reduceBubble', () => {
 })
 
 const bubbleOf = (detail: string, tool = 'Bash', category = 'routine') => ({
+  phase: 'command' as const,
   key: 'boot-a:1',
   tool,
   detail,
@@ -240,5 +248,132 @@ describe('bubbleLine', () => {
     }
     // Belt and braces: no unpaired surrogate anywhere in the string.
     expect(/[\uD800-\uDFFF]/.test(line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ''))).toBe(false)
+  })
+})
+
+describe('spinnerVerb', () => {
+  it('is deterministic — the same seed always picks the same verb, no Math.random anywhere', () => {
+    // The reducer layer injects the seed exactly as it injects Date.now()
+    // elsewhere; a pure picker means the same tick renders the same word on
+    // every device, and a test can pin an exact value.
+    expect(spinnerVerb(0)).toBe(spinnerVerb(0))
+    expect(spinnerVerb(42)).toBe(spinnerVerb(42))
+  })
+
+  it('walks the full published list — every verb from Accomplishing to Zesting is reachable as the seed advances', () => {
+    // The seed is a plain modulo index, so sweeping one full period must visit
+    // every word exactly once — proof the picker draws on the whole list, not a
+    // truncated head.
+    const reached = new Set(SPINNER_VERBS.map((_, seed) => spinnerVerb(seed)))
+
+    expect(SPINNER_VERBS.length).toBeGreaterThanOrEqual(180)
+    expect(SPINNER_VERBS[0]).toBe('Accomplishing')
+    expect(SPINNER_VERBS.at(-1)).toBe('Zesting')
+    expect(reached.size).toBe(SPINNER_VERBS.length)
+  })
+
+  it('wraps past the end of the list — the seed cycles forever without ever indexing off the array', () => {
+    // The render tick only grows; the picker must fold it back onto the list so
+    // a long-running session keeps cycling instead of falling off into
+    // undefined.
+    expect(spinnerVerb(SPINNER_VERBS.length)).toBe(spinnerVerb(0))
+    expect(spinnerVerb(SPINNER_VERBS.length * 3 + 5)).toBe(spinnerVerb(5))
+  })
+
+  it('falls back to the first verb for a non-finite seed rather than reading undefined off the array', () => {
+    // A clock read gone NaN/Infinity must not blank the bubble mid-think.
+    expect(spinnerVerb(Number.NaN)).toBe(SPINNER_VERBS[0])
+    expect(spinnerVerb(Number.POSITIVE_INFINITY)).toBe(SPINNER_VERBS[0])
+  })
+})
+
+const promptEvent = (overrides: Record<string, unknown> = {}) => ({
+  type: 'prompt',
+  id: 1,
+  bootId: 'boot-a',
+  sessionId: 's1',
+  title: 'my-app',
+  at: 10_000,
+  ...overrides,
+})
+
+describe('reduceBubble verb window', () => {
+  it('enters the verb window on prompt-submit — the bubble holds a thinking phase tagged with the project, no command yet', () => {
+    const thinking = reduceBubble(initialBubble, promptEvent())
+
+    expect(thinking.phase).toBe('verb')
+    expect(thinking.project).toBe('my-app')
+    expect(thinking.detail).toBe('')
+  })
+
+  it('hands off from verb to command the instant the first tool lands — the verb window ends on the first command', () => {
+    const thinking = reduceBubble(initialBubble, promptEvent())
+    const running = reduceBubble(thinking, toolEvent(2, { detail: 'npm install hono' }))
+
+    expect(running.phase).toBe('command')
+    expect(running.detail).toBe('npm install hono')
+  })
+
+  it('never shows a verb between commands — a mid-turn prompt after a command holds the running command, not a fresh think', () => {
+    // A slow command in flight is indistinguishable from a thinking gap, and a
+    // decorative verb there would replace a truthfully running command. A prompt
+    // that arrives once a command is held is a continuation, so the bubble stays
+    // on the command.
+    let bubble = reduceBubble(initialBubble, promptEvent())
+    bubble = reduceBubble(bubble, toolEvent(2, { detail: 'first cmd' }))
+    bubble = reduceBubble(bubble, promptEvent({ id: 3, title: 'my-app' }))
+
+    expect(bubble.phase).toBe('command')
+    expect(bubble.detail).toBe('first cmd')
+  })
+
+  it('swaps one command for the next within a turn without ever passing through a verb', () => {
+    let bubble = reduceBubble(initialBubble, promptEvent())
+    bubble = reduceBubble(bubble, toolEvent(2, { detail: 'first cmd' }))
+    bubble = reduceBubble(bubble, toolEvent(3, { detail: 'second cmd' }))
+
+    expect(bubble.phase).toBe('command')
+    expect(bubble.detail).toBe('second cmd')
+  })
+
+  it('leaves the bubble empty on a handshake — the install ping fires with no session and must never render as a command or a verb', () => {
+    const afterHandshake = reduceBubble(initialBubble, {
+      type: 'handshake',
+      id: 1,
+      bootId: 'boot-a',
+      title: 'my-app',
+    })
+
+    expect(afterHandshake).toBe(initialBubble)
+    expect(afterHandshake.phase).toBe('empty')
+  })
+
+  it('closes the turn on stop so the next prompt can reopen the verb window — a verb, then a command, then rest, then a verb again', () => {
+    let bubble = reduceBubble(initialBubble, promptEvent())
+    bubble = reduceBubble(bubble, toolEvent(2, { detail: 'first cmd' }))
+    const afterStop = reduceBubble(bubble, { type: 'stop', id: 3, bootId: 'boot-a' })
+    const nextTurn = reduceBubble(afterStop, promptEvent({ id: 4, title: 'my-app' }))
+
+    expect(afterStop.phase).toBe('empty')
+    expect(nextTurn.phase).toBe('verb')
+  })
+})
+
+describe('bubbleVerbLine', () => {
+  it('renders the ellipsis-suffixed thinking verb for a tick — the line the bubble shows during the verb window', () => {
+    // The projection injects the render tick as the seed; the verb line is the
+    // cycling word with the CLI-style trailing ellipsis so it reads as an
+    // in-progress thought, not a finished label.
+    expect(bubbleVerbLine(0)).toBe(`${spinnerVerb(0)}…`)
+    expect(bubbleVerbLine(42)).toBe(`${spinnerVerb(42)}…`)
+  })
+
+  it('cycles as the tick advances — a later tick can show a different verb, driving the ~1.5s TUI cadence from the caller', () => {
+    // The word only ever changes when the injected tick changes, so the caller
+    // owns the cadence (Math.floor(now / 1500)); across a full period the line
+    // visits more than one distinct verb.
+    const lines = new Set(SPINNER_VERBS.map((_, tick) => bubbleVerbLine(tick)))
+
+    expect(lines.size).toBe(SPINNER_VERBS.length)
   })
 })

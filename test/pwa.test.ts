@@ -131,8 +131,8 @@ describe('PWA shell', () => {
 
     const html = await (await app.request('/')).text()
 
-    // A `tool` frame is the bubble's only content source — the reducer dedups
-    // replay by (bootId, id) and holds the latest command.
+    // A `tool` frame fills the command line — the reducer dedups replay by
+    // (bootId, id) and holds the latest command.
     expect(html).toContain("addEventListener('tool'")
     expect(html).toContain('reduceBubble')
     // The display line is the reducer's word, clamped and rendered as text.
@@ -140,6 +140,23 @@ describe('PWA shell', () => {
     expect(html).toMatch(/bubbleLineEl\.textContent\s*=/)
     // The command is untrusted — it is shown, never parsed as markup.
     expect(html).not.toContain('innerHTML')
+  })
+
+  it('opens the verb window before the first command: a prompt cycles a thinking verb, handed off to the command line', async () => {
+    const { app } = buildApp()
+
+    const html = await (await app.request('/')).text()
+
+    // The same reducer runs the turn machine: prompt/stop frames drive the verb
+    // window, so reduceBubble must be fed from the prompt/stop path, not only
+    // from tool frames.
+    expect(html).toContain('bubbleState = reduceBubble(bubbleState, event)')
+    // The verb line is the reducer's word too, cycled by an injected render tick
+    // at the ~1.5s cadence the caller owns — never Math.random on this side.
+    expect(html).toContain('bubbleVerbLine')
+    expect(html).toMatch(/phase === 'verb'/)
+    expect(html).toMatch(/Math\.floor\(Date\.now\(\) \/ VERB_CYCLE_MS\)/)
+    expect(html).not.toContain('Math.random')
   })
 
   it('hides the SLOPDECK title while the bubble speaks, restoring it at rest', async () => {

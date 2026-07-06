@@ -445,6 +445,7 @@
     allowHoldMs,
     ambientShift,
     bubbleLine,
+    bubbleVerbLine,
     bubbleVisible,
     clawdPose,
     clawdSprite,
@@ -473,6 +474,7 @@
     runningCountBadge,
     STRIPE_WIPE_MS,
     titleVisible,
+    VERB_CYCLE_MS,
   } from '/deck-reducer.js'
 
   const TOKEN_KEY = 'slopdeck_deck_token'
@@ -589,7 +591,15 @@
     // command is shown literally as text, never parsed as markup.
     bubble.classList.toggle('hidden', !bubbleVisible(pose))
     title.classList.toggle('hidden', !titleVisible(pose))
-    const line = bubbleLine(bubbleState)
+    // Before the turn's first command the bubble cycles a thinking verb; once a
+    // command lands it shows the command line. The ~1.5s cadence is injected
+    // here as the render tick — one integer step per VERB_CYCLE_MS — so the verb
+    // advances on its own between the 500ms repaints while the reducer stays
+    // pure. Verb color rides the routine tier (set below via data-risk).
+    const line =
+      bubbleState.phase === 'verb'
+        ? bubbleVerbLine(Math.floor(Date.now() / VERB_CYCLE_MS))
+        : bubbleLine(bubbleState)
     if (bubbleLineEl.textContent !== line) bubbleLineEl.textContent = line
     // The risk tier drives the line's ambient color through CSS off data-risk —
     // all three tiers preserved, none flattened. The project tag rides the whole
@@ -635,6 +645,12 @@
       now: receiptNow,
     })
     state = reduceDeck(state, deckEvent)
+    // The same prompt/stop frame drives the bubble's turn machine: a prompt
+    // opens the verb window (the pre-first-command think), a stop closes the
+    // turn so the next prompt can reopen it. Fed the raw event — the phase
+    // machine reads its type and title, not the rebased clock. Tool frames flow
+    // through onToolEvent instead, so this only ever sees prompt/stop here.
+    bubbleState = reduceBubble(bubbleState, event)
     if (state.seenSession) localStorage.setItem(SEEN_SESSION_KEY, 'true')
     if (alert !== null && alert.channel === 'in-page') fireDoneAlert()
     render()

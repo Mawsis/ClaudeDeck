@@ -187,12 +187,16 @@ export function localEventTime(frame, receiptNow) {
  * @typedef {'high' | 'highlighted' | 'routine'} BubbleRisk the three ambient
  *   tiers, mapped 1:1 to the bash-classifier and preserved end-to-end — the
  *   ticker flattened `high` into `highlighted`; the bubble must not.
- * @typedef {{ key: string, tool: string, detail: string, category: string,
- *   risk: BubbleRisk, project: string }} BubbleState the one command Clawd is
- *   holding in his speech bubble: its dedup key, the raw line the gateway
- *   extracted (command head for Bash, cwd-relative path for edits), the
+ * @typedef {'empty' | 'verb' | 'command'} BubblePhase which face the bubble
+ *   shows: `empty` before a turn (and after a handshake — nothing to say),
+ *   `verb` between prompt-submit and the turn's first command (the cycling
+ *   thinking verb), `command` once a tool has landed (the held command line).
+ * @typedef {{ phase: BubblePhase, key: string, tool: string, detail: string,
+ *   category: string, risk: BubbleRisk, project: string }} BubbleState what
+ *   Clawd is saying: the phase, the held command's dedup key, the raw line the
+ *   gateway extracted (command head for Bash, cwd-relative path for edits), the
  *   classifier category driving the label, the risk tier driving the color,
- *   and the project the command belongs to.
+ *   and the project the bubble belongs to.
  */
 
 /** The tier the bubble falls back to for anything that is not a known tier —
@@ -211,6 +215,7 @@ function normalizeRisk(risk) {
 
 /** @type {BubbleState} An empty bubble — nothing said yet. */
 export const initialBubble = Object.freeze({
+  phase: 'empty',
   key: '',
   tool: '',
   detail: '',
@@ -220,12 +225,21 @@ export const initialBubble = Object.freeze({
 })
 
 /**
- * The speech bubble holds exactly one command: the latest tool call. Unlike the
- * ticker it replaced, there is no history and no linger timer — the pose is the
- * only thing that clears the bubble (bubbleVisible), so reduceBubble only ever
- * swaps in newer content and never resets it. Lifecycle frames (prompt, stop,
- * mode) leave the held line untouched, which is how the last command stays put
- * while the session runs.
+ * The bubble runs a three-phase turn machine, all in this one reducer:
+ *
+ * - `prompt` opens the verb window — but only from `empty`, i.e. the turn's
+ *   first prompt. A prompt that arrives while a command is already held is a
+ *   mid-turn continuation (reduceDeck treats it the same), so the truthfully
+ *   running command stays put rather than being papered over with a verb.
+ * - `tool` holds the latest command and ends the verb window. There is no
+ *   history and no linger timer — the pose owns visibility (bubbleVisible);
+ *   this reducer only ever swaps in the true latest command.
+ * - `stop` ends the turn, returning the bubble to `empty` so the *next* prompt
+ *   can reopen the verb window. The pose already hides the bubble on stop, so
+ *   the just-finished command was invisible anyway — this only rearms the verb.
+ * - `handshake`, `mode`, and every other frame leave the bubble untouched: the
+ *   install ping fires with no running session, so it must never masquerade as
+ *   a command or a think.
  *
  * @param {BubbleState} bubble
  * @param {{ type: string, id: number, bootId?: string, tool?: string,
@@ -235,6 +249,17 @@ export const initialBubble = Object.freeze({
  * @returns {BubbleState}
  */
 export function reduceBubble(bubble, event) {
+  // The turn's first prompt opens the verb window; a mid-turn prompt (bubble
+  // already past empty) is a continuation and leaves the held command alone.
+  if (event.type === 'prompt') {
+    if (bubble.phase !== 'empty') return bubble
+    return { ...initialBubble, phase: 'verb', project: String(event.title ?? '') }
+  }
+  // A stop closes the turn back to empty — nothing to say, and the next
+  // prompt's verb window is armed. Already empty means nothing changed.
+  if (event.type === 'stop') {
+    return bubble.phase === 'empty' ? bubble : initialBubble
+  }
   if (event.type !== 'tool') return bubble
   // Reconnect replay is at-least-once; the bubble must reflect the true latest
   // command, not a replayed older one. Keyed by (bootId, id) exactly as the
@@ -247,8 +272,10 @@ export function reduceBubble(bubble, event) {
   if (key === bubble.key) return bubble
   // All three risk tiers ride onto the bubble intact (unlike the ticker, which
   // flattened `high` into `highlighted`); the project is the tool frame's
-  // title — the cwd basename the gateway already derived.
+  // title — the cwd basename the gateway already derived. The first command of
+  // a turn ends the verb window; the phase becomes `command`.
   return {
+    phase: 'command',
     key,
     tool: String(event.tool ?? ''),
     detail: String(event.detail ?? ''),
@@ -256,6 +283,92 @@ export function reduceBubble(bubble, event) {
     risk: normalizeRisk(event.risk),
     project: String(event.title ?? ''),
   }
+}
+
+/**
+ * Claude Code's published thinking verbs — the words the CLI's spinner cycles
+ * while Claude reasons before its first tool call. Kept alphabetical (from
+ * `Accomplishing` to `Zesting`) so the range is legible and the bookends are
+ * verifiable; frozen so no caller can reorder it and silently shift the picker.
+ * @type {readonly string[]}
+ */
+export const SPINNER_VERBS = Object.freeze([
+  'Accomplishing', 'Actioning', 'Actualizing', 'Aligning', 'Analyzing',
+  'Architecting', 'Arranging', 'Assembling', 'Baking', 'Bamboozling',
+  'Bippizadooling', 'Booping', 'Bopping', 'Brainstorming', 'Brewing',
+  'Buffering', 'Building', 'Bungeeing', 'Calculating', 'Calibrating',
+  'Cerebrating', 'Channelling', 'Charging', 'Churning', 'Clauding',
+  'Coalescing', 'Cogitating', 'Combobulating', 'Composing', 'Computing',
+  'Concocting', 'Conjuring', 'Considering', 'Constructing', 'Contemplating',
+  'Cooking', 'Crafting', 'Cranking', 'Creating', 'Crunching', 'Deciphering',
+  'Decoding', 'Deliberating', 'Delving', 'Designing', 'Determining',
+  'Devising', 'Digesting', 'Discombobulating', 'Distilling', 'Divining',
+  'Doing', 'Dreaming', 'Effecting', 'Elaborating', 'Elucidating',
+  'Enchanting', 'Engineering', 'Envisioning', 'Establishing', 'Evaluating',
+  'Exploring', 'Fabricating', 'Fashioning', 'Fathoming', 'Fermenting',
+  'Fiddling', 'Figuring', 'Finagling', 'Finessing', 'Flibbertigibbeting',
+  'Flourishing', 'Focusing', 'Forging', 'Formulating', 'Frolicking',
+  'Gathering', 'Generating', 'Germinating', 'Gestating', 'Grokking',
+  'Hatching', 'Herding', 'Honking', 'Hustling', 'Hypothesizing', 'Ideating',
+  'Illuminating', 'Imagining', 'Incubating', 'Inferring', 'Ingesting',
+  'Inspecting', 'Interpreting', 'Inventing', 'Jamming', 'Jiving',
+  'Juggling', 'Kneading', 'Knitting', 'Ludicrousing', 'Machinating',
+  'Manifesting', 'Marinating', 'Massaging', 'Meandering', 'Moseying',
+  'Mulching', 'Mulling', 'Mustering', 'Musing', 'Navigating', 'Noodling',
+  'Optimizing', 'Orchestrating', 'Organizing', 'Percolating', 'Percussing',
+  'Perusing', 'Philosophising', 'Pinging', 'Plotting', 'Pondering',
+  'Pontificating', 'Prancing', 'Preparing', 'Processing', 'Producing',
+  'Puttering', 'Puzzling', 'Quantifying', 'Querying', 'Questing',
+  'Ratiocinating', 'Reasoning', 'Reconciling', 'Reticulating', 'Rooting',
+  'Ruminating', 'Rustling', 'Scaffolding', 'Scheming', 'Schlepping',
+  'Sculpting', 'Shimmying', 'Shucking', 'Simmering', 'Sketching', 'Smooshing',
+  'Sorting', 'Spelunking', 'Spinning', 'Sprinkling', 'Sprouting', 'Squinting',
+  'Stewing', 'Strategizing', 'Structuring', 'Summoning', 'Surveying',
+  'Sussing', 'Synthesizing', 'Tabulating', 'Thinkerating', 'Thinking',
+  'Tinkering', 'Toiling', 'Transfiguring', 'Transmuting', 'Traversing',
+  'Trundling', 'Unfurling', 'Unpacking', 'Unravelling', 'Untangling',
+  'Vibing', 'Visualizing', 'Wandering', 'Weaving', 'Whirring', 'Whisking',
+  'Wibbling', 'Wizarding', 'Working', 'Wrangling', 'Wrestling', 'Yak-shaving',
+  'Zesting',
+])
+
+/**
+ * Pick a thinking verb for a given seed. The seed is the render tick — the
+ * caller injects `Math.floor(Date.now() / VERB_CYCLE_MS)` exactly as the deck
+ * injects `now` into `deckView`, so verb selection stays pure while the ~1.5s
+ * cadence lives entirely in the projection. `Math.abs` keeps a negative or
+ * fractional seed on the list; a non-finite seed falls back to the first verb
+ * rather than reading `undefined` off the array.
+ *
+ * @param {number} seed the render tick — an integer index the caller advances
+ * @returns {string} the verb for this tick
+ */
+export function spinnerVerb(seed) {
+  // The list is a non-empty frozen literal and the index is a modulo of its
+  // length, so the read is always in bounds; the `?? 'Thinking'` coalesce only
+  // satisfies noUncheckedIndexedAccess and doubles as the non-finite fallback.
+  const index = Number.isFinite(seed) ? Math.abs(Math.floor(seed)) % SPINNER_VERBS.length : 0
+  return SPINNER_VERBS[index] ?? 'Thinking'
+}
+
+/** The verb window's cycle time: the CLI's TUI advances its spinner word about
+ * every 1.5s, so the deck matches that cadence. The projection turns the wall
+ * clock into a seed with `Math.floor(now / VERB_CYCLE_MS)` — one integer step
+ * per cycle — and hands it to bubbleVerbLine. */
+export const VERB_CYCLE_MS = 1_500
+
+/**
+ * The line the bubble shows during the verb window: the cycling thinking verb
+ * with a trailing ellipsis, so it reads as a thought in progress (`Pondering…`)
+ * rather than a finished label. The seed is the render tick the projection
+ * injects — the same clock-at-the-boundary discipline as `spinnerVerb` — so the
+ * ~1.5s cadence lives in the caller, and this stays pure and pinnable.
+ *
+ * @param {number} seed the render tick (`Math.floor(now / VERB_CYCLE_MS)`)
+ * @returns {string}
+ */
+export function bubbleVerbLine(seed) {
+  return `${spinnerVerb(seed)}…`
 }
 
 /**
